@@ -54,7 +54,7 @@ On first execution, `webrun` will automatically download an isolated Deno runtim
   Print the usage instructions.
 
 - `--test`
-  Discovers and runs exported functions starting with "test" inside your target script instead of the default export.
+  Discovers and runs exported functions starting with "test" inside your target script(s) instead of the default export. You can pass multiple scripts (e.g. `webrun --test a.ts b.ts`).
 
 - `--self-test`
   Run the built-in test suite to verify the sandbox is working correctly.
@@ -115,7 +115,7 @@ export default async function(ctx) {
 ```
 
 ### Testing Scripts
-If you run `webrun --test my_script.ts`, `webrun` will look for named exports that begin with `test` and execute them using the native test runner.
+If you run `webrun --test my_script.ts`, `webrun` will look for named exports that begin with `test` and execute them using the native test runner. You can also pass multiple test files at once, such as `webrun --test a.test.ts b.test.ts`, and all discovered test exports will be executed in a combined suite.
 
 ```javascript
 export async function testMyFunction(t, ctx) {

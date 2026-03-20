@@ -15,7 +15,7 @@ export interface WebrunConfig {
 
 export interface CommandInvocation {
     action: "run" | "test";
-    targetScriptPath: string;
+    targetScriptPath: string | string[];
     sandboxArgs: string[];
     injectedArgsObj: Record<string, any>;
     networkFlags: string[];
@@ -27,8 +27,8 @@ export interface SandboxContextPayload {
     fallbackToTemp: boolean;
     injectedArgsObj: Record<string, any>;
     finalEnvVars: Record<string, string>;
-    targetUrlHref: string;
-    targetScriptPath: string;
+    targetUrlHref: string | string[];
+    targetScriptPath: string | string[];
     sandboxArgs: string[];
     opfsRoot: string;
     memoryMB?: number;
@@ -52,15 +52,17 @@ export function parseCommandInvocation(args: string[], config: WebrunConfig): Co
         Deno.exit(1);
     }
 
-    const targetScriptPath = rawArgs[0];
-    const scriptArgs = rawArgs.slice(1);
-
+    let targetScriptPath: string | string[];
     const injectedArgsObj: Record<string, any> = { "--": [] };
     let onlyPositional = false;
-    for (let i = 0; i < scriptArgs.length; i++) {
-        const arg = scriptArgs[i];
+    const testPaths: string[] = [];
+    let scriptFound = false;
+
+    for (let i = 0; i < rawArgs.length; i++) {
+        const arg = rawArgs[i];
         if (onlyPositional) {
-            injectedArgsObj["--"].push(arg);
+            if (isTest) testPaths.push(arg);
+            else injectedArgsObj["--"].push(arg);
             continue;
         }
         if (arg === "--") {
@@ -74,8 +76,8 @@ export function parseCommandInvocation(args: string[], config: WebrunConfig): Co
             if (eqIdx !== -1) {
                 val = key.slice(eqIdx + 1);
                 key = key.slice(0, eqIdx);
-            } else if (i + 1 < scriptArgs.length && !scriptArgs[i + 1].startsWith("-") && scriptArgs[i + 1] !== "--") {
-                val = scriptArgs[++i];
+            } else if (i + 1 < rawArgs.length && !rawArgs[i + 1].startsWith("-") && rawArgs[i + 1] !== "--") {
+                val = rawArgs[++i];
             } else {
                 val = true;
             }
@@ -85,7 +87,30 @@ export function parseCommandInvocation(args: string[], config: WebrunConfig): Co
             }
             injectedArgsObj[key] = val;
         } else {
-            injectedArgsObj["--"].push(arg);
+            if (!isTest) {
+                if (!scriptFound) {
+                    targetScriptPath = arg;
+                    scriptFound = true;
+                } else {
+                    injectedArgsObj["--"].push(arg);
+                }
+            } else {
+                testPaths.push(arg);
+                scriptFound = true;
+            }
+        }
+    }
+
+    if (isTest) {
+        if (testPaths.length === 0) {
+            console.error("Usage: webrun --test [options] <script1.ts> ... [args...]\nRun with --help for documentation.");
+            Deno.exit(1);
+        }
+        targetScriptPath = testPaths;
+    } else {
+        if (!scriptFound) {
+            console.error("Usage: webrun [options] <script.ts> [args...]\nRun with --help for documentation.");
+            Deno.exit(1);
         }
     }
 
@@ -101,7 +126,7 @@ export function parseCommandInvocation(args: string[], config: WebrunConfig): Co
 
     return {
         action: isTest ? "test" : "run",
-        targetScriptPath,
+        targetScriptPath: targetScriptPath!,
         sandboxArgs: rawArgs,
         injectedArgsObj,
         networkFlags
@@ -569,7 +594,7 @@ export function resolveLocalConfiguration(currentDir: string): { config: WebrunC
         if (parent === configDir) break;
         configDir = parent;
     }
-        
+
     const importMapPaths: string[] = [];
     const finalConfig: WebrunConfig = { limits: { timeoutMillis: 120000, memoryMB: 512 }, permissions: { storage: {}, network: [], env: [] } };
     let finalConfigDir = currentDir;
@@ -716,50 +741,81 @@ export async function executeInsideSandbox(payload: SandboxContextPayload) {
                 console.error(`FATAL OOM: Memory exceeded! (Current: ${currentMB}MB / Max: ${MAX_RSS_MB}MB)`);
                 exitFn(137);
             }
-        }, 1000);
+        }, 500);
     }
 
     delete (globalThis as any).Deno;
 
     try {
-        const mod = await import(payload.targetUrlHref);
         const contextPayload = {
             args: argsPayload,
             flags: argsPayload.flags,
             env: payload.finalEnvVars,
-            command: payload.targetScriptPath,
+            command: Array.isArray(payload.targetScriptPath) ? payload.targetScriptPath[0] : payload.targetScriptPath,
             argv: payload.sandboxArgs,
             storage: storageManager
         };
 
         if (payload.action === "test") {
-            const testExports = Object.entries(mod).filter(([k, v]) => k.startsWith("test") && typeof v === "function");
-            if (testExports.length === 0) {
+            const targetUrls = Array.isArray(payload.targetUrlHref) ? payload.targetUrlHref : [payload.targetUrlHref as string];
+            const targetPaths = Array.isArray(payload.targetScriptPath) ? payload.targetScriptPath : [payload.targetScriptPath as string];
+
+            const allTestExports: { name: string, fn: Function, scriptPath: string }[] = [];
+
+            for (let i = 0; i < targetUrls.length; i++) {
+                const url = targetUrls[i];
+                const mod = await import(url);
+                const scriptPath = targetPaths[i];
+                const testExports = Object.entries(mod).filter(([k, v]) => k.startsWith("test") && typeof v === "function");
+                for (const [name, fn] of testExports) {
+                    allTestExports.push({ name, fn: fn as Function, scriptPath });
+                }
+            }
+
+            if (allTestExports.length === 0) {
                 console.warn("\x1b[33m[Webrun]\x1b[0m No test exports found. Expected functions starting with 'test'.");
                 exitFn(0);
                 return;
             }
+
             testFn({
-                name: "[webrun] " + payload.targetScriptPath,
+                name: "[webrun] test suite",
                 sanitizeOps: false,
                 sanitizeResources: false,
                 sanitizeExit: false,
                 async fn(t: any) {
-                    for (const [name, fn] of testExports) {
+                    const grouped: Record<string, { name: string, fn: Function }[]> = {};
+                    for (const { name, fn, scriptPath } of allTestExports) {
+                        if (!grouped[scriptPath]) grouped[scriptPath] = [];
+                        grouped[scriptPath].push({ name, fn });
+                    }
+
+                    for (const [scriptPath, exports] of Object.entries(grouped)) {
                         await t.step({
-                            name,
+                            name: scriptPath,
                             sanitizeOps: false,
                             sanitizeResources: false,
                             sanitizeExit: false,
-                            async fn(stepCtx: any) {
-                                const guestT = createGuestTestContext(stepCtx);
-                                try {
-                                    await (fn as Function)(guestT, contextPayload);
-                                } catch (err: any) {
-                                    if (err instanceof WebrunSkipError) {
-                                        return;
-                                    }
-                                    throw err;
+                            async fn(fileStepCtx: any) {
+                                for (const { name, fn } of exports) {
+                                    await fileStepCtx.step({
+                                        name: typeof name === 'string' ? (name.startsWith("test") ? name.substring(4).trim() : name) : name,
+                                        sanitizeOps: false,
+                                        sanitizeResources: false,
+                                        sanitizeExit: false,
+                                        async fn(stepCtx: any) {
+                                            const guestT = createGuestTestContext(stepCtx);
+                                            try {
+                                                contextPayload.command = scriptPath;
+                                                await fn(guestT, contextPayload);
+                                            } catch (err: any) {
+                                                if (err instanceof WebrunSkipError) {
+                                                    return;
+                                                }
+                                                throw err;
+                                            }
+                                        }
+                                    });
                                 }
                             }
                         });
@@ -767,6 +823,8 @@ export async function executeInsideSandbox(payload: SandboxContextPayload) {
                 }
             });
         } else {
+            contextPayload.command = payload.targetScriptPath as string;
+            const mod = await import(payload.targetUrlHref as string);
             const mainFn = typeof mod.default === 'function' ? mod.default : (mod.default && typeof mod.default.main === 'function' ? mod.default.main : null);
             if (!mainFn) {
                 throw new Error("Worker script must export a default function or an object containing a 'main' function.");
@@ -864,13 +922,18 @@ export async function spawnSandboxProcess(cwd: string, args: string[]) {
     } catch (_) { }
 
     // 4. Assemble Process Image
+    const resolveTargetUrl = async (p: string) => p.startsWith("http") ? new URL(p).href : new URL(await import("node:url").then(m => m.pathToFileURL(p))).href;
+    const targetUrlHref = Array.isArray(invocation.targetScriptPath)
+        ? await Promise.all(invocation.targetScriptPath.map(resolveTargetUrl))
+        : await resolveTargetUrl(invocation.targetScriptPath as string);
+
     const payloadObject: SandboxContextPayload = {
         action: invocation.action,
         storageRoot: policy.storageRoot,
         fallbackToTemp: policy.fallbackToTemp,
         injectedArgsObj: invocation.injectedArgsObj,
         finalEnvVars: computeRuntimeEnvironment(config.permissions?.env),
-        targetUrlHref: invocation.targetScriptPath.startsWith("http") ? new URL(invocation.targetScriptPath).href : new URL(await import("node:url").then(m => m.pathToFileURL(invocation.targetScriptPath))).href,
+        targetUrlHref,
         targetScriptPath: invocation.targetScriptPath,
         sandboxArgs: invocation.sandboxArgs,
         opfsRoot: opfsTmp,
