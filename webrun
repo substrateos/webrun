@@ -1,0 +1,177 @@
+#!/bin/bash
+
+# Determine OS and Architecture to match Deno's naming convention
+OS=$(uname -s)
+ARCH=$(uname -m)
+
+if [ "$OS" = "Darwin" ]; then
+  if [ "$ARCH" = "arm64" ]; then
+    DENO_TARGET="aarch64-apple-darwin"
+    EXPECTED_SHA="316876e652fe839eec6e4223fb4e685bc8591897ef41889a3f614540e2ba7cda"
+  elif [ "$ARCH" = "x86_64" ]; then
+    DENO_TARGET="x86_64-apple-darwin"
+    EXPECTED_SHA="4d263ee0eef2beb06b9bc6fe997f849d8aba5fd14465da7fcd12e5dc4850cc03"
+  fi
+elif [ "$OS" = "Linux" ]; then
+  if [ "$ARCH" = "aarch64" ]; then
+    DENO_TARGET="aarch64-unknown-linux-gnu"
+    EXPECTED_SHA="abf6b16e8fbd8aa3907bc9d56630a53a256feb31c2dafa80a92129da17308b81"
+  elif [ "$ARCH" = "x86_64" ]; then
+    DENO_TARGET="x86_64-unknown-linux-gnu"
+    EXPECTED_SHA="f930789c59335e374ebe28671f3b426c2e40e5328de0edab7002185f81fdf857"
+  fi
+fi
+
+if [ -z "$DENO_TARGET" ]; then
+  echo "Unsupported architecture: $OS $ARCH"
+  exit 1
+fi
+
+SOURCE="${BASH_SOURCE[0]}"
+while [ -h "$SOURCE" ]; do
+  DIR="$( cd -P "$( dirname "$SOURCE" )" >/dev/null 2>&1 && pwd )"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+SCRIPT_DIR="$( cd -P "$( dirname "$SOURCE" )" >/dev/null 2>&1 && pwd )"
+export WEBRUN_BIN="$SCRIPT_DIR/$(basename "$SOURCE")"
+
+DENO_VERSION="v2.7.6"
+
+if [ -n "$HOME" ] && [ -d "$HOME" ]; then
+  CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/webrun"
+else
+  CACHE_DIR="${TMPDIR:-/tmp}/webrun"
+fi
+
+DEFAULT_DENO_DIR="$CACHE_DIR/deno/deno-${DENO_VERSION}-${DENO_TARGET}-${EXPECTED_SHA}"
+
+DENO_INSTALL_DIR="${DENO_INSTALL_DIR:-$DEFAULT_DENO_DIR}"
+DENO_BIN="$DENO_INSTALL_DIR/deno"
+DENO_DIR="$DENO_INSTALL_DIR"
+
+if [ ! -f "$DENO_BIN" ]; then
+  echo "Downloading Deno ${DENO_VERSION} for $DENO_TARGET..." >&2
+  mkdir -p "$DENO_DIR"
+  
+  ZIP_NAME="deno-${DENO_TARGET}.zip"
+  curl -fsSL "https://github.com/denoland/deno/releases/download/${DENO_VERSION}/${ZIP_NAME}" -o "$DENO_DIR/${ZIP_NAME}"
+  echo "${EXPECTED_SHA}  ${ZIP_NAME}" > "$DENO_DIR/${ZIP_NAME}.sha256sum"
+
+  pushd "$DENO_DIR" > /dev/null
+  if command -v sha256sum >/dev/null 2>&1; then
+    CHECKSUM_CMD="sha256sum -c"
+  elif command -v shasum >/dev/null 2>&1; then
+    CHECKSUM_CMD="shasum -a 256 -c"
+  else
+    CHECKSUM_CMD=""
+    echo "Warning: checksum utility not found, skipping validation." >&2
+  fi
+
+  if [ -n "$CHECKSUM_CMD" ]; then
+    echo "Verifying checksum..." >&2
+    if ! $CHECKSUM_CMD "${ZIP_NAME}.sha256sum" >&2; then
+      echo "Error: Checksum verification failed!" >&2
+      popd > /dev/null
+      rm -f "$DENO_DIR/${ZIP_NAME}" "$DENO_DIR/${ZIP_NAME}.sha256sum"
+      exit 1
+    fi
+  fi
+  popd > /dev/null
+
+  unzip -q -o "$DENO_DIR/${ZIP_NAME}" -d "$DENO_DIR"
+  rm -f "$DENO_DIR/${ZIP_NAME}" "$DENO_DIR/${ZIP_NAME}.sha256sum"
+  chmod +x "$DENO_BIN"
+fi
+
+if [[ "$1" == "--self-unbundle" ]]; then
+  if ! grep -q "^__DATA__" "$SOURCE"; then
+    echo "Error: Exectutable is not bundled (missing __DATA__ marker)."
+    exit 1
+  fi
+  DEST_DIR="${2:-webrun-src}"
+  mkdir -p "$DEST_DIR"
+  awk '/^__DATA__/ {exit} {print}' "$SOURCE" > "$DEST_DIR/webrun"
+  chmod +x "$DEST_DIR/webrun"
+  awk '/^__DATA__/ {flag=1; next} /^__TEST_DATA__/ {flag=0} flag {print}' "$SOURCE" > "$DEST_DIR/webrun.deno.ts"
+  awk '/^__TEST_DATA__/ {flag=1; next} /^__README_DATA__/ {flag=0} flag {print}' "$SOURCE" > "$DEST_DIR/webrun.test.ts"
+  awk '/^__README_DATA__/ {flag=1; next} /^__LICENSE_DATA__/ {flag=0} flag {print}' "$SOURCE" > "$DEST_DIR/README.md"
+  awk '/^__LICENSE_DATA__/ {flag=1; next} flag {print}' "$SOURCE" > "$DEST_DIR/LICENSE"
+  echo "Successfully unbundled webrun source to $DEST_DIR"
+  exit 0
+fi
+
+if [[ "$1" == "--self-bundle" ]]; then
+  SRC_DIR="$SCRIPT_DIR"
+  for file in "webrun" "webrun.deno.ts" "webrun.test.ts" "README.md" "LICENSE"; do
+    if [ ! -f "$SRC_DIR/$file" ]; then
+      echo "Error: Missing required file $SRC_DIR/$file for bundling." >&2
+      exit 1
+    fi
+  done
+  awk '/^__DATA__/ {exit} {print}' "$SRC_DIR/webrun"
+  echo "__DATA__"
+  cat "$SRC_DIR/webrun.deno.ts"
+  echo "__TEST_DATA__"
+  cat "$SRC_DIR/webrun.test.ts"
+  echo "__README_DATA__"
+  cat "$SRC_DIR/README.md"
+  echo "__LICENSE_DATA__"
+  cat "$SRC_DIR/LICENSE"
+  exit 0
+fi
+
+if [[ "$1" == "--self-test" ]]; then
+  shift
+  FILTER_ARGS=()
+  COVERAGE_FLAG=""
+  for arg in "$@"; do
+    if [[ "$arg" == "--coverage" ]]; then
+      COVERAGE_FLAG="--coverage=cov_profile"
+      rm -rf cov_profile
+    else
+      if [[ "$arg" != "--filter" && "${#FILTER_ARGS[@]}" -eq 0 && "$arg" != -* ]]; then
+        FILTER_ARGS=("--filter" "$arg")
+      else
+        FILTER_ARGS+=("$arg")
+      fi
+    fi
+  done
+
+  if grep -q "^__TEST_DATA__" "$SOURCE"; then
+    DENO_TEST_SCRIPT=$(mktemp)
+    mv "$DENO_TEST_SCRIPT" "$DENO_TEST_SCRIPT.ts"
+    DENO_TEST_SCRIPT="$DENO_TEST_SCRIPT.ts"
+    awk '/^__TEST_DATA__/ {flag=1; next} /^__README_DATA__/ {flag=0} flag {print}' "$SOURCE" > "$DENO_TEST_SCRIPT"
+    
+    "$DENO_BIN" test -A --no-check $COVERAGE_FLAG "${FILTER_ARGS[@]}" "$DENO_TEST_SCRIPT"
+    EXIT_CODE=$?
+    rm -f "$DENO_TEST_SCRIPT"
+    if [ -n "$COVERAGE_FLAG" ]; then
+      "$DENO_BIN" coverage cov_profile
+    fi
+    exit $EXIT_CODE
+  else
+    "$DENO_BIN" test -A --no-check $COVERAGE_FLAG "${FILTER_ARGS[@]}" "$SCRIPT_DIR/webrun.test.ts"
+    EXIT_CODE=$?
+    if [ -n "$COVERAGE_FLAG" ]; then
+      "$DENO_BIN" coverage cov_profile
+    fi
+    exit $EXIT_CODE
+  fi
+fi
+
+if grep -q "^__DATA__" "$SOURCE"; then
+  DENO_SCRIPT=$(mktemp)
+  mv "$DENO_SCRIPT" "$DENO_SCRIPT.ts"
+  DENO_SCRIPT="$DENO_SCRIPT.ts"
+  awk '/^__DATA__/ {flag=1; next} /^__TEST_DATA__/ {flag=0} flag {print}' "$SOURCE" > "$DENO_SCRIPT"
+  
+  "$DENO_BIN" run -A --no-check --quiet "$DENO_SCRIPT" "$@"
+  EXIT_CODE=$?
+  rm -f "$DENO_SCRIPT"
+  exit $EXIT_CODE
+else
+  "$DENO_BIN" run -A --no-check --quiet "$SCRIPT_DIR/webrun.deno.ts" "$@"
+  exit $?
+fi

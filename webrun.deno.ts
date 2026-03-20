@@ -1,0 +1,944 @@
+import { resolve, dirname } from "https://deno.land/std@0.224.0/path/mod.ts";
+
+// =========================================================
+// 1. TYPES & DOMAIN MODELS
+// =========================================================
+export interface WebrunConfig {
+    limits?: { timeoutMillis?: number, memoryMB?: number };
+    permissions?: {
+        storage?: Record<string, { access: "read" | "write" }>;
+        network?: string[];
+        env?: string[];
+    };
+    importMap?: string;
+}
+
+export interface CommandInvocation {
+    action: "run" | "test";
+    targetScriptPath: string;
+    sandboxArgs: string[];
+    injectedArgsObj: Record<string, any>;
+    networkFlags: string[];
+}
+
+export interface SandboxContextPayload {
+    action: "run" | "test";
+    storageRoot: string;
+    fallbackToTemp: boolean;
+    injectedArgsObj: Record<string, any>;
+    finalEnvVars: Record<string, string>;
+    targetUrlHref: string;
+    targetScriptPath: string;
+    sandboxArgs: string[];
+    opfsRoot: string;
+    memoryMB?: number;
+}
+
+// =========================================================
+// 2. PURE: CONFIGURATION & PARSING
+// =========================================================
+
+export function parseCommandInvocation(args: string[], config: WebrunConfig): CommandInvocation {
+    const rawArgs = [...args];
+    let isTest = false;
+    const testIdx = rawArgs.indexOf("--test");
+    if (testIdx !== -1) {
+        isTest = true;
+        rawArgs.splice(testIdx, 1);
+    }
+
+    if (rawArgs.length === 0) {
+        console.error("Usage: webrun [options] <script.ts> [args...]\nRun with --help for documentation.");
+        Deno.exit(1);
+    }
+
+    const targetScriptPath = rawArgs[0];
+    const scriptArgs = rawArgs.slice(1);
+
+    const injectedArgsObj: Record<string, any> = { "--": [] };
+    let onlyPositional = false;
+    for (let i = 0; i < scriptArgs.length; i++) {
+        const arg = scriptArgs[i];
+        if (onlyPositional) {
+            injectedArgsObj["--"].push(arg);
+            continue;
+        }
+        if (arg === "--") {
+            onlyPositional = true;
+            continue;
+        }
+        if (arg.startsWith("-")) {
+            let key = arg.replace(/^-+/, "");
+            let val: string | boolean = "";
+            const eqIdx = key.indexOf("=");
+            if (eqIdx !== -1) {
+                val = key.slice(eqIdx + 1);
+                key = key.slice(0, eqIdx);
+            } else if (i + 1 < scriptArgs.length && !scriptArgs[i + 1].startsWith("-") && scriptArgs[i + 1] !== "--") {
+                val = scriptArgs[++i];
+            } else {
+                val = true;
+            }
+            if (key.startsWith("env.")) {
+                console.error("FATAL: Flag '--" + key + "' collides with reserved internal namespaces.");
+                Deno.exit(1);
+            }
+            injectedArgsObj[key] = val;
+        } else {
+            injectedArgsObj["--"].push(arg);
+        }
+    }
+
+    const SSRF_BLOCK = "--deny-net=127.0.0.0/8,localhost,0.0.0.0/8,10.0.0.0/8,192.168.0.0/16,172.16.0.0/12,169.254.0.0/16";
+    const networkFlags: string[] = [];
+    const allowedDomains = config.permissions?.network || [];
+    if (allowedDomains.length > 0) {
+        networkFlags.push(`--allow-net=${allowedDomains.join(",")}`);
+        networkFlags.push(SSRF_BLOCK);
+    } else {
+        networkFlags.push("--deny-net");
+    }
+
+    return {
+        action: isTest ? "test" : "run",
+        targetScriptPath,
+        sandboxArgs: rawArgs,
+        injectedArgsObj,
+        networkFlags
+    };
+}
+
+export function computeRuntimeEnvironment(allowedEnv: string[] = []): Record<string, string> {
+    const finalEnvVars: Record<string, string> = {};
+    for (const k of allowedEnv) {
+        finalEnvVars[k] = Deno.env.get(k) || "";
+    }
+    return finalEnvVars;
+}
+
+export function computeStorageAccessPolicies(configDirs: Record<string, { access: "read" | "write" }>, configDir: string, currentDir: string, isolatedTmp: string) {
+    let isPwdAllowed = false;
+    let fallbackToTemp = false;
+
+    if (Object.keys(configDirs).length === 0) {
+        fallbackToTemp = true;
+    }
+
+    const denoReadAllow = [isolatedTmp];
+    const denoWriteAllow = [isolatedTmp];
+    let seatbeltReadEnclaves = ``;
+    let seatbeltWriteEnclaves = ``;
+
+    for (const [fsPath, settings] of Object.entries(configDirs)) {
+        const absFsPath = resolve(configDir, fsPath);
+        if (currentDir === absFsPath || currentDir.startsWith(absFsPath + "/")) {
+            isPwdAllowed = true;
+        }
+
+        denoReadAllow.push(absFsPath);
+        seatbeltReadEnclaves += `\n    (subpath "${absFsPath}")`;
+
+        if (settings.access === "write") {
+            denoWriteAllow.push(absFsPath);
+            seatbeltWriteEnclaves += `\n    (subpath "${absFsPath}")`;
+        }
+    }
+
+    if (fallbackToTemp) {
+        denoReadAllow.push(currentDir);
+        seatbeltReadEnclaves += `\n    (subpath "${currentDir}")`;
+    }
+
+    return {
+        isPwdAllowed,
+        fallbackToTemp,
+        denoReadAllow,
+        denoWriteAllow,
+        seatbeltReadEnclaves,
+        seatbeltWriteEnclaves,
+        storageRoot: fallbackToTemp ? isolatedTmp : currentDir
+    };
+}
+
+export function generateSeatbeltProfile(cwd: string, readEnclaves: string, writeEnclaves: string): string {
+    return `(version 1)
+(deny default)
+(import "bsd.sb")
+(allow file-read-metadata)
+(allow signal)
+(allow system-fsctl)
+(deny process-exec)
+(deny process-fork)
+
+(allow file-read* (literal "${cwd}"))
+
+(allow process-exec
+    (literal (param "DENO_BIN_PATH"))
+)
+
+(allow file-read*
+    (subpath "/usr/lib")
+    (subpath "/usr/local/lib")
+    (subpath "/System/Library")
+    (subpath "/opt/homebrew")
+    (literal "/dev/random")
+    (literal "/dev/urandom")
+    (literal "/dev/null")
+    (literal "/dev/tty")
+    (literal "/etc/resolv.conf") 
+    (literal "/etc/hosts")       
+    (literal "/private/etc/resolv.conf") 
+    (literal "/private/etc/hosts")       
+    (literal "/private/etc/services")       
+    (literal "/private/var/run/mDNSResponder")
+)
+
+(allow file-read* file-map-executable
+    (subpath (param "DENO_BIN_DIR"))
+)
+
+(allow system-socket)
+(allow sysctl-read)
+(allow mach-lookup)
+(allow ipc-posix-shm)
+(allow network-outbound
+    (remote tcp "*:443")
+    (remote tcp "*:80")  
+    (remote udp "*:53")  
+    (literal "/private/var/run/mDNSResponder")
+)
+
+(allow file-read* file-write*
+    (subpath (param "SANDBOX_CACHE"))
+    (subpath (param "ISOLATED_TMP"))${writeEnclaves}
+)
+
+(allow file-read*
+    (literal (param "DENO_JSON"))
+    (literal (param "DENO_JSONC"))
+    (literal (param "DENO_LOCK"))
+    (literal (param "SCRIPT_PATH"))${readEnclaves}
+)
+
+(deny file-read* file-write*
+    (regex #"^.*/\\.env.*$")
+)
+`;
+}
+
+export function buildNodeSinkholeDependencies(isolatedTmp: string, configDir: string, importMapPath?: string): string {
+    const sinkholeURI = "data:text/javascript,export default null; throw new Error('Security Error: Node/NPM modules are blocked.');";
+    const importMapPayload: any = {
+        imports: {
+            "node:fs": sinkholeURI,
+            "node:child_process": sinkholeURI,
+            "node:net": sinkholeURI,
+            "node:os": sinkholeURI,
+            "node:path": sinkholeURI,
+            "node:vm": sinkholeURI,
+        },
+        scopes: {}
+    };
+
+    if (importMapPath) {
+        try {
+            const userImportMapPath = resolve(configDir, importMapPath);
+            const userMap = JSON.parse(Deno.readTextFileSync(userImportMapPath));
+
+            const rewriteToAbsolute = (obj: Record<string, string>) => {
+                if (!obj) return;
+                for (const [key, value] of Object.entries(obj)) {
+                    if (value.startsWith("./") || value.startsWith("../")) {
+                        let resolved = "file://" + resolve(dirname(userImportMapPath), value);
+                        if (value.endsWith("/") && !resolved.endsWith("/")) resolved += "/";
+                        obj[key] = resolved;
+                    }
+                }
+            };
+
+            if (userMap.imports) {
+                rewriteToAbsolute(userMap.imports);
+                Object.assign(importMapPayload.imports, userMap.imports);
+            }
+
+            if (userMap.scopes) {
+                for (const [scopeKey, scopeValue] of Object.entries(userMap.scopes)) {
+                    rewriteToAbsolute(scopeValue as any);
+                }
+                Object.assign(importMapPayload.scopes, userMap.scopes);
+            }
+        } catch (e: any) {
+            console.error(`Warning: Failed to parse or merge importMap at ${importMapPath}: ${e.message}`);
+        }
+    }
+
+    const combinedPath = resolve(isolatedTmp, "sandbox_import_map.json");
+    Deno.writeTextFileSync(combinedPath, JSON.stringify(importMapPayload));
+    return combinedPath;
+}
+
+// =========================================================
+// 3. PURE: WEB API VIRTUALIZATION
+// =========================================================
+
+export function createStorageManager(storageRoot: string, fallbackToTemp: boolean) {
+    const localDeno = Deno;
+    const { open, writeFile, readFile, stat, lstat, realPath } = localDeno;
+    const resolvedStorageRoot = localDeno.realPathSync(storageRoot);
+
+    async function enforceEnclave(target: string) {
+        try {
+            const linfo = await lstat(target);
+            const rp = await realPath(target).catch(err => {
+                if (err instanceof localDeno.errors.NotFound && linfo.isSymlink) {
+                    throw new DOMException("Broken symlinks are not permitted.", "SecurityError");
+                }
+                throw err;
+            });
+            if (rp !== resolvedStorageRoot && !rp.startsWith(resolvedStorageRoot + "/")) {
+                throw new DOMException("Path resolves outside enclave.", "SecurityError");
+            }
+        } catch (e: any) {
+            if (!(e instanceof localDeno.errors.NotFound)) throw e;
+        }
+    }
+
+    class FileSystemWritableFileStream extends WritableStream<any> {
+        _file: any;
+        constructor(file: any) {
+            let position = 0;
+            super({
+                async write(chunk: any) {
+                    let data, pos;
+                    if (typeof chunk === "string") {
+                        data = new TextEncoder().encode(chunk);
+                        pos = position;
+                    } else if (chunk.type === "write") {
+                        data = typeof chunk.data === "string" ? new TextEncoder().encode(chunk.data) : chunk.data;
+                        pos = chunk.position !== undefined ? chunk.position : position;
+                    } else if (chunk.type === "truncate") {
+                        await file.truncate(chunk.size);
+                        return;
+                    } else if (chunk.type === "seek") {
+                        position = chunk.position;
+                        return;
+                    } else {
+                        data = chunk;
+                        pos = position;
+                    }
+                    await file.seek(pos, localDeno.SeekMode.Start);
+                    await file.write(data);
+                    position = pos + data.byteLength;
+                },
+                close() { file.close(); }
+            });
+            this._file = file;
+        }
+        async seek(position: number) {
+            const w = this.getWriter();
+            await w.write({ type: "seek", position });
+            w.releaseLock();
+        }
+        async truncate(size: number) {
+            const w = this.getWriter();
+            await w.write({ type: "truncate", size });
+            w.releaseLock();
+        }
+        async write(chunk: any) {
+            const w = this.getWriter();
+            await w.write(chunk);
+            w.releaseLock();
+        }
+    }
+
+    class File extends Blob {
+        _path: string;
+        _size: number;
+        name: string;
+        constructor(path: string, name: string, size: number) {
+            super([]);
+            this._path = path;
+            this._size = size;
+            this.name = name;
+        }
+        override get size() { return this._size; }
+        override stream(): any {
+            const ts = new TransformStream();
+            enforceEnclave(this._path).then(() => open(this._path, { read: true })).then((file: any) => {
+                file.readable.pipeTo(ts.writable).catch(() => { });
+            });
+            return ts.readable;
+        }
+        override async arrayBuffer() {
+            await enforceEnclave(this._path);
+            const data = await readFile(this._path);
+            return data.buffer;
+        }
+        override async text() {
+            await enforceEnclave(this._path);
+            const data = await readFile(this._path);
+            return new TextDecoder().decode(data);
+        }
+    }
+
+    let _getPath: (h: any) => string | undefined;
+
+    class FileSystemHandle {
+        #path: string;
+        name: string;
+        kind: string;
+        constructor(kind: string, path: string, name: string) {
+            this.kind = kind;
+            this.#path = path;
+            this.name = name;
+        }
+        static {
+            _getPath = (h: any) => { return #path in h ? h.#path : undefined; };
+        }
+        async isSameEntry(other: any) {
+            if (!other || typeof other !== 'object' || !(#path in other)) return false;
+            return this.kind === other.kind && this.#path === other.#path;
+        }
+    }
+
+    class FileSystemFileHandle extends FileSystemHandle {
+        constructor(path: string, name: string) { super('file', path, name); }
+        async createWritable(opts: { keepExistingData?: boolean } = {}) {
+            await enforceEnclave(_getPath(this)!);
+            const file = await open(_getPath(this)!, { write: true, create: true, truncate: !opts.keepExistingData });
+            return new FileSystemWritableFileStream(file);
+        }
+        async getFile() {
+            await enforceEnclave(_getPath(this)!);
+            const meta = await stat(_getPath(this)!);
+            return new File(_getPath(this)!, this.name, meta.size);
+        }
+    }
+
+    class FileSystemDirectoryHandle extends FileSystemHandle {
+        constructor(path: string, name: string) { super('directory', path, name); }
+        async getFileHandle(name: string, opts: any = {}) {
+            if (typeof name !== 'string' || name.includes("/") || name.includes(String.fromCharCode(92)) || name === ".." || name === ".") {
+                throw new DOMException("Invalid file name.", "SecurityError");
+            }
+            const target = `${_getPath(this)!}/${name}`;
+            await enforceEnclave(target);
+            if (opts.create) {
+                await writeFile(target, new Uint8Array(0), { create: true, append: true });
+            } else {
+                try {
+                    const fi = await stat(target);
+                    if (fi.isDirectory) throw new DOMException("Type mismatch.", "TypeMismatchError");
+                } catch (err) {
+                    if (err instanceof localDeno.errors.NotFound) throw new DOMException("The requested file could not be found.", "NotFoundError");
+                    throw err;
+                }
+            }
+            return new FileSystemFileHandle(target, name);
+        }
+        async getDirectoryHandle(name: string, opts: any = {}) {
+            if (typeof name !== 'string' || name.includes("/") || name.includes(String.fromCharCode(92)) || name === ".." || name === ".") {
+                throw new DOMException("Invalid directory name.", "SecurityError");
+            }
+            const target = `${_getPath(this)!}/${name}`;
+            await enforceEnclave(target);
+            if (opts.create) {
+                await localDeno.mkdir(target, { recursive: true });
+            } else {
+                try {
+                    const fi = await stat(target);
+                    if (!fi.isDirectory) throw new DOMException("Type mismatch.", "TypeMismatchError");
+                } catch (err) {
+                    if (err instanceof localDeno.errors.NotFound) throw new DOMException("The requested directory could not be found.", "NotFoundError");
+                    throw err;
+                }
+            }
+            return new FileSystemDirectoryHandle(target, name);
+        }
+        async removeEntry(name: string, opts: any = {}) {
+            if (typeof name !== 'string' || name.includes("/") || name.includes(String.fromCharCode(92)) || name === ".." || name === ".") {
+                throw new DOMException("Invalid entry name.", "SecurityError");
+            }
+            const target = `${_getPath(this)!}/${name}`;
+            await enforceEnclave(target);
+            try {
+                await localDeno.remove(target, { recursive: !!opts.recursive });
+            } catch (err) {
+                if (err instanceof localDeno.errors.NotFound) {
+                    throw new DOMException("The requested entry could not be found.", "NotFoundError");
+                }
+                throw err;
+            }
+        }
+        async *entries() {
+            const thisPath = _getPath(this)!;
+            await enforceEnclave(thisPath);
+            for await (const dirEntry of localDeno.readDir(thisPath)) {
+                if (dirEntry.isFile) {
+                    yield [dirEntry.name, new FileSystemFileHandle(`${thisPath}/${dirEntry.name}`, dirEntry.name)];
+                } else if (dirEntry.isDirectory) {
+                    yield [dirEntry.name, new FileSystemDirectoryHandle(`${thisPath}/${dirEntry.name}`, dirEntry.name)];
+                }
+            }
+        }
+        async *keys() {
+            for await (const [name] of this.entries()) yield name;
+        }
+        async *values() {
+            for await (const [, handle] of this.entries()) yield handle;
+        }
+        [Symbol.asyncIterator]() {
+            return this.entries();
+        }
+        async resolve(possibleDescendant: any) {
+            if (await this.isSameEntry(possibleDescendant)) return [];
+            const descendantPath = _getPath(possibleDescendant);
+            const thisPath = _getPath(this)!;
+            if (!descendantPath || !descendantPath.startsWith(thisPath + '/')) return null;
+            return descendantPath.slice(thisPath.length + 1).split('/');
+        }
+    }
+
+    class StorageManager {
+        async persisted() { return !fallbackToTemp; }
+        async getDirectory() {
+            return new FileSystemDirectoryHandle(storageRoot, "root");
+        }
+        async estimate() {
+            return { quota: 0, usage: 0 };
+        }
+    }
+
+    return new StorageManager();
+}
+
+// =========================================================
+// 4. IMPURE: EXECUTION LIFECYCLES
+// =========================================================
+
+export function resolveLocalConfiguration(currentDir: string): { config: WebrunConfig, configDir: string, configFound: boolean, configPaths: string[] } {
+    let configDir = currentDir;
+
+    const allConfigs: { config: WebrunConfig, dir: string, path: string }[] = [];
+
+    while (true) {
+        const potentialWebrunPath = resolve(configDir, "webrun.json");
+        const potentialPackagePath = resolve(configDir, "package.json");
+
+        let foundConfig: any = null;
+        let foundPath = "";
+
+        try {
+            if (Deno.statSync(potentialWebrunPath).isFile) {
+                foundConfig = JSON.parse(Deno.readTextFileSync(potentialWebrunPath));
+                foundPath = potentialWebrunPath;
+            }
+        } catch (_) { }
+
+        if (!foundConfig) {
+            try {
+                if (Deno.statSync(potentialPackagePath).isFile) {
+                    const pkgInfo = JSON.parse(Deno.readTextFileSync(potentialPackagePath));
+                    if (pkgInfo.webrun && typeof pkgInfo.webrun === "object") {
+                        foundConfig = pkgInfo.webrun;
+                        foundPath = potentialPackagePath;
+                    }
+                }
+            } catch (_) { }
+        }
+
+        if (foundConfig) {
+            if (!foundConfig.permissions) foundConfig.permissions = { storage: {}, network: [], env: [] };
+            if (!foundConfig.permissions.storage) foundConfig.permissions.storage = {};
+            if (!foundConfig.permissions.network) foundConfig.permissions.network = [];
+            if (!foundConfig.permissions.env) foundConfig.permissions.env = [];
+
+            allConfigs.push({ config: foundConfig, dir: configDir, path: foundPath });
+        }
+
+        const parent = resolve(configDir, "..");
+        if (parent === configDir) break;
+        configDir = parent;
+    }
+
+    const finalConfig: WebrunConfig = { limits: { timeoutMillis: 120000, memoryMB: 512 }, permissions: { storage: {}, network: [], env: [] } };
+    let finalConfigDir = currentDir;
+    let configFound = false;
+
+    if (allConfigs.length > 0) {
+        configFound = true;
+        const mostSpecific = allConfigs[0];
+        finalConfigDir = mostSpecific.dir;
+
+        // Verify subset rule up the tree
+        for (let i = 0; i < allConfigs.length - 1; i++) {
+            const childConfig = allConfigs[i].config;
+            const childConfigDir = allConfigs[i].dir;
+            const parentConfig = allConfigs[i + 1].config;
+            const parentConfigDir = allConfigs[i + 1].dir;
+
+            // Check limits
+            if (parentConfig.limits) {
+                if (parentConfig.limits.timeoutMillis !== undefined && childConfig.limits?.timeoutMillis !== undefined && childConfig.limits.timeoutMillis > parentConfig.limits.timeoutMillis) {
+                    console.error(`SECURITY FATAL: Child webrun configuration (${childConfigDir}) attempts to escalate 'timeoutMillis' limit (${childConfig.limits.timeoutMillis}) beyond parent (${parentConfigDir}) limit (${parentConfig.limits.timeoutMillis}).`);
+                    Deno.exit(1);
+                }
+                if (parentConfig.limits.memoryMB !== undefined && childConfig.limits?.memoryMB !== undefined && childConfig.limits.memoryMB > parentConfig.limits.memoryMB) {
+                    console.error(`SECURITY FATAL: Child webrun configuration (${childConfigDir}) attempts to escalate 'memoryMB' limit (${childConfig.limits.memoryMB}) beyond parent (${parentConfigDir}) limit (${parentConfig.limits.memoryMB}).`);
+                    Deno.exit(1);
+                }
+            }
+
+            // Check env
+            for (const e of childConfig.permissions!.env!) {
+                if (!parentConfig.permissions!.env!.includes(e)) {
+                    console.error(`SECURITY FATAL: Child webrun configuration (${childConfigDir}) attempts to escalate 'env' permissions for '${e}' not granted by parent (${parentConfigDir}).`);
+                    Deno.exit(1);
+                }
+            }
+
+            // Check network
+            for (const n of childConfig.permissions!.network!) {
+                if (!parentConfig.permissions!.network!.includes(n)) {
+                    console.error(`SECURITY FATAL: Child webrun configuration (${childConfigDir}) attempts to escalate 'network' permissions for '${n}' not granted by parent (${parentConfigDir}).`);
+                    Deno.exit(1);
+                }
+            }
+
+            // Check storage
+            const parentStorageAbs = Object.entries(parentConfig.permissions!.storage!).map(([k, v]: [string, any]) => ({ path: resolve(parentConfigDir, k), access: v.access }));
+            const childStorageAbs = Object.entries(childConfig.permissions!.storage!).map(([k, v]: [string, any]) => ({ path: resolve(childConfigDir, k), access: v.access }));
+
+            for (const c of childStorageAbs) {
+                let covered = false;
+                for (const p of parentStorageAbs) {
+                    if (c.path === p.path || c.path.startsWith(p.path + "/")) {
+                        if (c.access === "write" && p.access !== "write") {
+                            continue;
+                        }
+                        covered = true;
+                        break;
+                    }
+                }
+                if (!covered) {
+                    console.error(`SECURITY FATAL: Child webrun configuration (${childConfigDir}) attempts to escalate 'storage' permissions for '${c.path}' not granted by parent (${parentConfigDir}).`);
+                    Deno.exit(1);
+                }
+            }
+        }
+
+        // Apply most specific config permissions & importMap
+        Object.assign(finalConfig.permissions!, mostSpecific.config.permissions);
+        if (mostSpecific.config.importMap) finalConfig.importMap = mostSpecific.config.importMap;
+
+        // Apply limits strictly narrowing from all levels
+        for (let i = allConfigs.length - 1; i >= 0; i--) {
+            const cfg = allConfigs[i].config;
+            if (cfg.limits) {
+                if (cfg.limits.timeoutMillis !== undefined) finalConfig.limits!.timeoutMillis = Math.min(finalConfig.limits!.timeoutMillis!, cfg.limits.timeoutMillis);
+                if (cfg.limits.memoryMB !== undefined) finalConfig.limits!.memoryMB = Math.min(finalConfig.limits!.memoryMB!, cfg.limits.memoryMB);
+            }
+        }
+    }
+
+    return { config: finalConfig, configDir: finalConfigDir, configFound, configPaths: allConfigs.map(c => c.path) };
+}
+
+
+class WebrunSkipError extends Error {
+    constructor(msg: string) {
+        super(msg);
+        this.name = "WebrunSkipError";
+    }
+}
+
+function createGuestTestContext(denoCtx: any): any {
+    return {
+        name: denoCtx.name,
+        async run(subName: string, subFn: Function) {
+            await denoCtx.step(subName, async (subT: any) => {
+                await subFn(createGuestTestContext(subT));
+            });
+        },
+        log(...args: any[]) { console.log(...args); },
+        assert(cond: any, msg: string) { if (!cond) throw new Error(msg || "Assertion failed"); },
+        fail(msg: string) { throw new Error(msg || "Test failed explicitly"); },
+        skip(msg: string = "Skipped") {
+            console.log(`\x1b[33m[SKIP]\x1b[0m ${msg}`);
+            throw new WebrunSkipError(msg);
+        }
+    };
+}
+
+export async function executeInsideSandbox(payload: SandboxContextPayload) {
+    const rawArgs = payload.injectedArgsObj;
+    const argsPayload: any = [...rawArgs["--"]];
+    const flags = { ...rawArgs };
+    delete flags["--"];
+    argsPayload.flags = flags;
+
+    const storageManager = createStorageManager(payload.storageRoot, payload.fallbackToTemp);
+    const opfsManager = createStorageManager(payload.opfsRoot, true);
+
+    if (!(globalThis as any).navigator) {
+        (globalThis as any).navigator = {};
+    }
+    (globalThis as any).navigator.storage = opfsManager;
+
+    const exitFn = Deno.exit;
+    const testFn = Deno.test;
+    const getMemoryUsage = Deno.memoryUsage.bind(Deno);
+
+    if (payload.memoryMB) {
+        const MAX_RSS_MB = payload.memoryMB;
+        const MAX_RSS_BYTES = MAX_RSS_MB * 1024 * 1024;
+        setInterval(() => {
+            const usage = getMemoryUsage();
+            if (usage.rss > MAX_RSS_BYTES) {
+                const currentMB = (usage.rss / 1024 / 1024).toFixed(2);
+                console.error(`FATAL OOM: Memory exceeded! (Current: ${currentMB}MB / Max: ${MAX_RSS_MB}MB)`);
+                exitFn(137);
+            }
+        }, 1000);
+    }
+
+    delete (globalThis as any).Deno;
+
+    try {
+        const mod = await import(payload.targetUrlHref);
+        const contextPayload = {
+            args: argsPayload,
+            flags: argsPayload.flags,
+            env: payload.finalEnvVars,
+            command: payload.targetScriptPath,
+            argv: payload.sandboxArgs,
+            storage: storageManager
+        };
+
+        if (payload.action === "test") {
+            const testExports = Object.entries(mod).filter(([k, v]) => k.startsWith("test") && typeof v === "function");
+            if (testExports.length === 0) {
+                console.warn("\x1b[33m[Webrun]\x1b[0m No test exports found. Expected functions starting with 'test'.");
+                exitFn(0);
+                return;
+            }
+            testFn({
+                name: "[webrun] " + payload.targetScriptPath,
+                sanitizeOps: false,
+                sanitizeResources: false,
+                sanitizeExit: false,
+                async fn(t: any) {
+                    for (const [name, fn] of testExports) {
+                        await t.step({
+                            name,
+                            sanitizeOps: false,
+                            sanitizeResources: false,
+                            sanitizeExit: false,
+                            async fn(stepCtx: any) {
+                                const guestT = createGuestTestContext(stepCtx);
+                                try {
+                                    await (fn as Function)(guestT, contextPayload);
+                                } catch (err: any) {
+                                    if (err instanceof WebrunSkipError) {
+                                        return;
+                                    }
+                                    throw err;
+                                }
+                            }
+                        });
+                    }
+                }
+            });
+        } else {
+            const mainFn = typeof mod.default === 'function' ? mod.default : (mod.default && typeof mod.default.main === 'function' ? mod.default.main : null);
+            if (!mainFn) {
+                throw new Error("Worker script must export a default function or an object containing a 'main' function.");
+            }
+            await mainFn(contextPayload);
+            exitFn(0);
+        }
+    } catch (err: any) {
+        console.error("[Sandbox Error]", err.message);
+        // Allow IPC pipe to flush stderr cleanly before exiting
+        await new Promise(r => setTimeout(r, 10));
+        exitFn(1);
+    }
+}
+
+
+export async function spawnSandboxProcess(cwd: string, args: string[]) {
+    // 1. Setup Ephemeral Paths & Config
+    const projectRoot = Deno.realPathSync(cwd);
+    const localDenoDir = await (async () => {
+        const d = await import("https://deno.land/std@0.224.0/path/mod.ts").then(m => m.resolve(Deno.env.get("HOME") || "/tmp", ".webrun_cache"));
+        Deno.mkdirSync(d, { recursive: true });
+        return Deno.realPathSync(d);
+    })();
+    const isolatedTmp = Deno.realPathSync(Deno.makeTempDirSync({ prefix: 'sandbox_tmp_' }));
+    const runnerTmp = Deno.realPathSync(Deno.makeTempDirSync({ prefix: 'webrun_runner_' }));
+    const opfsTmp = Deno.realPathSync(Deno.makeTempDirSync({ prefix: 'webrun_opfs_' }));
+    const { config, configDir, configFound, configPaths } = resolveLocalConfiguration(cwd);
+
+    const MAX_V8_MEM_MB = config.limits?.memoryMB || 512;
+
+    // Help Command Evaluation
+    if (args.includes("--help") || args.includes("-h")) {
+        try {
+            const selfPath = Deno.env.get("WEBRUN_BIN") || resolve(projectRoot, "webrun");
+            let readmeContent = Deno.readTextFileSync(selfPath);
+            if (readmeContent.match(/^__README_DATA__\s*$/m)) {
+                readmeContent = readmeContent.split(/^__README_DATA__\s*$/m)[1].split(/^__LICENSE_DATA__\s*$/m)[0];
+            } else {
+                readmeContent = Deno.readTextFileSync(resolve(dirname(selfPath), "README.md"));
+            }
+            console.log(`Usage: webrun [options] <script.ts> [args...]\n\nOptions:\n  -h, --help         Print the usage instructions\n  --self-test         Run the built-in test suite to verify the sandbox is working correctly\n  --self-bundle <dest>    Package the webrun source files into a single executable file\n  --self-unbundle <dest>  Extract the webrun source files from the executable into a folder for editing\n  --test             Run the target script as a test suite instead of a standard program\n`);
+            const contractMatch = readmeContent.match(/## API[^\n]*\n+([\s\S]*?)(\n## |$)/i);
+            if (contractMatch && contractMatch[1]) {
+                console.log("==========================================");
+                console.log("WEBRUN API CONTRACT");
+                console.log("==========================================");
+                console.log(contractMatch[1].trim());
+            }
+        } catch (_) {
+            console.error("Webrun: Documentation unavailable.");
+        }
+        Deno.exit(0);
+    }
+
+    // 2. Parse Routing State
+    const invocation = parseCommandInvocation(args, config);
+    const policy = computeStorageAccessPolicies(config.permissions?.storage || {}, configDir, cwd, isolatedTmp);
+
+    const protectedFiles: string[] = [...configPaths];
+    try { protectedFiles.push(Deno.realPathSync(Deno.env.get("WEBRUN_BIN") || resolve(projectRoot, "webrun"))); } catch (_) { }
+    try { protectedFiles.push(Deno.realPathSync(new URL(import.meta.url).pathname)); } catch (_) { }
+
+    for (const allowed of policy.denoWriteAllow) {
+        for (const protectedFile of protectedFiles) {
+            if (protectedFile === allowed || protectedFile.startsWith(allowed + "/")) {
+                console.error(`SECURITY FATAL: webrun executable (${protectedFile}) is within a permitted write directory (${allowed}). Refusing to run.`);
+                Deno.exit(1);
+            }
+        }
+    }
+
+    if (!policy.isPwdAllowed && !policy.fallbackToTemp) {
+        console.error(`SECURITY FATAL: PWD (${cwd}) is not permitted by webrun.json fs allowlist rules.`);
+        Deno.exit(1);
+    }
+
+    const importMapPath = buildNodeSinkholeDependencies(isolatedTmp, configDir, config.importMap);
+
+    // 3. Compile Security Vectors
+    const seatbeltReadEnclaves = policy.seatbeltReadEnclaves + `\n    (subpath "${runnerTmp}")`;
+    const seatbeltWriteEnclaves = policy.seatbeltWriteEnclaves + `\n    (subpath "${opfsTmp}")`;
+    const seatbeltProfile = generateSeatbeltProfile(cwd, seatbeltReadEnclaves, seatbeltWriteEnclaves);
+
+    const lockFlag = [];
+    const lockFilePath = resolve(projectRoot, "deno.lock");
+    try {
+        if (Deno.statSync(lockFilePath).isFile) lockFlag.push(`--lock=${lockFilePath}`);
+    } catch (_) { }
+
+    // 4. Assemble Process Image
+    const payloadObject: SandboxContextPayload = {
+        action: invocation.action,
+        storageRoot: policy.storageRoot,
+        fallbackToTemp: policy.fallbackToTemp,
+        injectedArgsObj: invocation.injectedArgsObj,
+        finalEnvVars: computeRuntimeEnvironment(config.permissions?.env),
+        targetUrlHref: invocation.targetScriptPath.startsWith("http") ? new URL(invocation.targetScriptPath).href : new URL(await import("node:url").then(m => m.pathToFileURL(invocation.targetScriptPath))).href,
+        targetScriptPath: invocation.targetScriptPath,
+        sandboxArgs: invocation.sandboxArgs,
+        opfsRoot: opfsTmp,
+        memoryMB: config.limits?.memoryMB
+    };
+
+    const bootstrapPath = resolve(runnerTmp, "webrun_bootstrap.ts");
+    const bootstrapCode = `import { executeInsideSandbox } from "${new URL(import.meta.url).href}";
+const payload = ${JSON.stringify(payloadObject)};
+await executeInsideSandbox(payload);
+`;
+    Deno.writeTextFileSync(bootstrapPath, bootstrapCode);
+
+    const innerDenoArgs = [
+        invocation.action,
+        ...invocation.networkFlags,
+        ...lockFlag,
+        `--v8-flags=--max-old-space-size=${MAX_V8_MEM_MB}`,
+        `--import-map=${importMapPath}`,
+        "--no-prompt",
+        "--no-npm",
+        "--no-check",
+        `--allow-read=${policy.denoReadAllow.join(",")},${runnerTmp},${opfsTmp}`,
+        `--allow-write=${policy.denoWriteAllow.join(",")},${opfsTmp}`,
+        `--allow-env=TMP_DIR`,
+        bootstrapPath
+    ];
+
+    const isMac = Deno.build.os === "darwin";
+    const baseCmd = isMac ? "sandbox-exec" : Deno.execPath();
+
+    const execArgs = isMac ? [
+        "-p", seatbeltProfile,
+        "-D", `SANDBOX_CACHE=${localDenoDir}`,
+        "-D", `ISOLATED_TMP=${isolatedTmp}`,
+        "-D", `DENO_JSON=${resolve(projectRoot, "deno.json")}`,
+        "-D", `DENO_JSONC=${resolve(projectRoot, "deno.jsonc")}`,
+        "-D", `DENO_LOCK=${lockFilePath}`,
+        "-D", `SCRIPT_PATH=${Deno.realPathSync(new URL(import.meta.url).pathname)}`,
+        "-D", `DENO_BIN_DIR=${dirname(Deno.execPath())}`,
+        "-D", `DENO_BIN_PATH=${Deno.execPath()}`,
+        Deno.execPath(),
+        ...innerDenoArgs
+    ] : innerDenoArgs;
+
+    const cmdOptions: Deno.CommandOptions = {
+        args: execArgs,
+        env: {
+            "HOME": isolatedTmp,
+            "TMPDIR": isolatedTmp,
+            "PATH": "/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin",
+            "USER": "sandbox",
+            "DENO_DIR": localDenoDir,
+            "TMP_DIR": isolatedTmp
+        },
+        clearEnv: true,
+        stdin: "inherit",
+        stdout: "inherit",
+        stderr: "inherit"
+    };
+
+    if (config.limits?.timeoutMillis) {
+        cmdOptions.signal = AbortSignal.timeout(config.limits.timeoutMillis);
+    }
+
+    const cmd = new Deno.Command(baseCmd, cmdOptions);
+
+    try {
+        const child = cmd.spawn();
+        const status = await child.status;
+        try { Deno.removeSync(isolatedTmp, { recursive: true }); } catch (_) { }
+        try { Deno.removeSync(runnerTmp, { recursive: true }); } catch (_) { }
+        try { Deno.removeSync(opfsTmp, { recursive: true }); } catch (_) { }
+        Deno.exit(status.code);
+    } catch (e: any) {
+        try { Deno.removeSync(isolatedTmp, { recursive: true }); } catch (_) { }
+        try { Deno.removeSync(runnerTmp, { recursive: true }); } catch (_) { }
+        try { Deno.removeSync(opfsTmp, { recursive: true }); } catch (_) { }
+        if (e.name === "AbortError") {
+            console.error(`\n[Sandbox] Execution timed out after ${config.limits?.timeoutMillis}ms`);
+            Deno.exit(143);
+        }
+        console.error("[Sandbox] Failed to spawn:", e);
+        Deno.exit(1);
+    }
+}
+
+// =========================================================
+// 5. GLOBAL ENTRYPOINT EVALUATION
+// =========================================================
+
+if (import.meta.main) {
+    await spawnSandboxProcess(Deno.cwd(), Deno.args);
+}

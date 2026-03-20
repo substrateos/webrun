@@ -1,0 +1,1118 @@
+export interface TestCase {
+    name: string;
+
+    /** Executable sandbox payload closure or raw ES module string evaluating against `ctx` natively */
+    script?: string | ((ctx: any) => Promise<void>);
+
+    /** Define a virtual file tree for the project root before running the script */
+    files?: Record<string, string>;
+
+    /** Optional webrun.json configuration to serialize to the run directory */
+    config?: Record<string, any>;
+
+    /** Specific environment variables to inject into the host execution context */
+    env?: Record<string, string>;
+
+    /** Specific command line arguments to forward via the explicit parameter vector */
+    args?: string[];
+
+    /** Specific PWD sub-directory relative to the test root to invoke the worker from */
+    cwd?: string;
+
+    /** Override where the test script is placed (defaults to "src/test.js") */
+    main?: string;
+
+    /** Expected sandbox boundary assertions */
+    expectCode: number | "nonzero";
+    expectStdout?: string;
+    expectStderr?: string;
+}
+
+export const tests: TestCase[] = [
+    {
+        name: "[File System] Blocks read outside enclave (/etc/passwd)",
+        script: async (ctx: any) => {
+            const { args, env } = ctx;
+            if (typeof Deno !== 'undefined') {
+                try { Deno.readTextFileSync("/etc/passwd"); }
+                catch (e: any) { console.error("BLOCKED:", e.message); throw e; }
+            } else {
+                console.error("BLOCKED: Runtime does not support file APIs");
+                throw new Error("Fallback block");
+            }
+        },
+        expectCode: 1,
+        expectStderr: "BLOCKED:"
+    },
+    {
+        name: "[File System / StorageManager] Blocks write outside enclave (/tmp/escape)",
+        script: async (ctx: any) => {
+            const { args, env } = ctx;
+            try {
+                const root = await ctx.storage.getDirectory();
+                // Attempt to break out of StorageManager bounds
+                await root.getFileHandle("../../../../../../tmp/sandbox_escape.txt", { create: true });
+            }
+            catch (e: any) { console.error("BLOCKED:", e.message); throw e; }
+        },
+        expectCode: 1,
+        expectStderr: "BLOCKED:"
+    },
+    {
+        name: "[StorageManager] Allows read/write within enclave (PWD)",
+        config: { permissions: { storage: { ".": { access: "read" }, "data": { access: "write" } } } },
+        files: { "data/.keep": "" },
+        cwd: "data",
+        main: "data/test.js",
+        script: async (ctx: any) => {
+            const { args, env } = ctx;
+            const root = await ctx.storage.getDirectory();
+            if (await ctx.storage.persisted() !== true) throw new Error("Expected PWD to be persisted");
+            const fileHandle = await root.getFileHandle("test_write.txt", { create: true });
+            const writable = await fileHandle.createWritable();
+            const writer = writable.getWriter();
+            await writer.write("hello");
+            await writer.close();
+            console.log("SUCCESS");
+        },
+        expectCode: 0,
+        expectStdout: "SUCCESS"
+    },
+    {
+        name: "[Network] Blocks outgoing requests by default",
+        config: { permissions: { storage: { ".": { access: "read" } } } },
+        script: async (ctx: any) => {
+            const { args, env } = ctx;
+            try { await fetch("https://example.com"); }
+            catch (e: any) { console.error("BLOCKED:", e.message); throw e; }
+        },
+        expectCode: 1,
+        expectStderr: "BLOCKED:"
+    },
+    {
+        name: "[Network] Blocks SSRF to localhost even if network is open",
+        config: { permissions: { network: ["example.com"], storage: { ".": { access: "read" } } } },
+        script: async (ctx: any) => {
+            const { args, env } = ctx;
+            try { await fetch("http://127.0.0.1:8080"); }
+            catch (e: any) { console.error("BLOCKED:", e.message); throw e; }
+        },
+        expectCode: 1,
+        expectStderr: "BLOCKED:"
+    },
+    {
+        name: "[Environment] Scrubs injected host environment variables",
+        env: { "SUPER_SECRET_VAR": "pwned" },
+        config: { permissions: { storage: { ".": { access: "read" } } } },
+        script: async (ctx: any) => {
+            const { args, env } = ctx;
+            if (typeof Deno !== 'undefined') {
+                try {
+                    const secret = Deno.env.get("SUPER_SECRET_VAR");
+                    if (secret) { console.error("LEAKED:", secret); throw new Error("Leaked"); }
+                    else { console.log("SECURE"); }
+                } catch (e: any) {
+                    console.error("DENO_BLOCKED:", e.message);
+                    throw e;
+                }
+            } else {
+                console.error("DENO_BLOCKED: Runtime does not support Deno env mapping");
+                throw new Error("Blocked");
+            }
+        },
+        expectCode: 1,
+        expectStderr: "DENO_BLOCKED: Runtime does not support Deno env mapping"
+    },
+    {
+        name: "[Node/NPM] Sinkholes node:fs dynamic imports",
+        config: { permissions: { storage: { ".": { access: "read" } } } },
+        script: async (ctx: any) => {
+            const { args, env } = ctx;
+            try { await import("node:fs"); }
+            catch (e: any) { console.error("BLOCKED:", e.message); throw e; }
+        },
+        expectCode: 1,
+        expectStderr: "Security Error: Node/NPM modules are blocked"
+    },
+    {
+        name: "[StorageManager] Blocks writes conditionally via \"read\" access map limits",
+        config: { permissions: { storage: { ".": { access: "read" } } } },
+        script: async (ctx: any) => {
+            const { args, env } = ctx;
+            const root = await ctx.storage.getDirectory();
+            try {
+                await root.getFileHandle("test.txt", { create: true });
+            } catch (e: any) { console.error("BLOCKED:", e.message); throw e; }
+        },
+        expectCode: 1,
+        expectStderr: "BLOCKED:"
+    },
+    {
+        name: "[Enclave / StorageManager] Obeys dynamic webrun.json filesystem scope limits per-execution",
+        config: { permissions: { storage: { "my_custom_enclave": { access: "write" } } } },
+        files: {
+            "my_custom_enclave/.keep": ""
+        },
+        cwd: "my_custom_enclave",
+        main: "my_custom_enclave/test_script.js",
+        script: async (ctx: any) => {
+            const { args, env } = ctx;
+            const root = await ctx.storage.getDirectory();
+            const fileHandle = await root.getFileHandle("test.txt", { create: true });
+            const writable = await fileHandle.createWritable();
+            const writer = writable.getWriter();
+            await writer.write("enclave_write");
+            await writer.close();
+            console.log("ENCLAVE_SUCCESS");
+        },
+        expectCode: 0,
+        expectStdout: "ENCLAVE_SUCCESS"
+    },
+    {
+        name: "[Network] Obeys dynamic webrun.json allowlists",
+        config: { permissions: { network: ["example.com"], storage: { ".": { access: "read" } } } },
+        script: async (ctx: any) => {
+            const { args, env } = ctx;
+            const resp = await fetch("https://example.com");
+            if (resp.ok) {
+                console.log("FETCH_ALLOWED");
+            } else {
+                console.error("FETCH_FAILED:", resp.status);
+                throw new Error("Fetch Failed");
+            }
+        },
+        expectCode: 0,
+        expectStdout: "FETCH_ALLOWED"
+    },
+    {
+        name: "[Execution] Receives explicit arguments, environment variables, and parsed flags via ctx object",
+        config: { permissions: { env: ["API_KEY"], storage: { ".": { access: "read" } } } },
+        env: { "API_KEY": "test_123" },
+        args: ["--mode", "debug", "--verbose=true", "-f", "--", "val1", "val2"],
+        script: async (ctx: any) => {
+            const { args, env } = ctx;
+            const pos = [...args];
+            const apiKey = env.API_KEY;
+            const mode = args.flags.mode;
+            const verbose = args.flags.verbose;
+            const f = args.flags.f;
+
+            if (pos.join(",") === "val1,val2" && apiKey === "test_123" && mode === "debug" && String(verbose) === "true" && String(f) === "true") {
+                console.log("PARAMS_OK");
+            } else {
+                console.error("FAILED params:", pos, apiKey, mode, verbose, f);
+                throw new Error("Params mismatch");
+            }
+        },
+        expectCode: 0,
+        expectStdout: "PARAMS_OK"
+
+    },
+    {
+        name: "[Execution] Protects positional array from flag manipulation natively",
+        config: { permissions: { storage: { ".": { access: "read" } } } },
+        args: ["----", "hacked", "positionalValue"],
+        script: async (ctx: any) => {
+            const { args, env } = ctx;
+            const pos = [...args];
+            if (pos[0] !== "positionalValue") throw new Error("Positional array overwritten");
+            if (args.flags[""] !== "hacked") throw new Error("Empty flag missing");
+            console.log("REACHED");
+        },
+        expectCode: 0
+    },
+    {
+        name: "[StorageManager] Falls back to temporary dir if webrun.json is missing",
+        script: async (ctx: any) => {
+            const { args, env } = ctx;
+            const root = await ctx.storage.getDirectory();
+            if (await ctx.storage.persisted() !== false) throw new Error("Expected temp dir to not be persisted");
+            const fh = await root.getFileHandle("temp.txt", { create: true });
+            if (!fh) throw new Error("Could not create temp file");
+            const w = await fh.createWritable();
+            const writer = w.getWriter();
+            await writer.write("ok");
+            await writer.close();
+            const r = await fh.getFile();
+            const text = await r.text();
+            if (text !== "ok") throw new Error("Could not read from temp");
+        },
+        expectCode: 0
+    },
+    {
+        name: "[StorageManager] Falls back to temporary dir if webrun.json has no storage allowlist",
+        config: {
+        },
+        files: {},
+        script: async (ctx: any) => {
+            const { args, env } = ctx;
+            const root = await ctx.storage.getDirectory();
+            if (await ctx.storage.persisted() !== false) throw new Error("Expected temp dir to not be persisted");
+            const fh = await root.getFileHandle("temp.txt", { create: true });
+            if (!fh) throw new Error("Could not create temp file");
+            const w = await fh.createWritable();
+            const writer = w.getWriter();
+            await writer.write("ok");
+            await writer.close();
+            const r = await fh.getFile();
+            const text = await r.text();
+            if (text !== "ok") throw new Error("Could not read from temp");
+        },
+        expectCode: 0
+    },
+    {
+        name: "[Configuration] Discovers and applies \"webrun\" key natively via package.json fallback schema",
+        files: { "package.json": JSON.stringify({ name: "pkg_test", webrun: { permissions: { storage: { "testing_dir": { access: "write" } } } } }), "testing_dir/.keep": "" },
+        cwd: "testing_dir",
+        main: "testing_dir/test_pkg.js",
+        script: async (ctx: any) => {
+            const { args, env } = ctx;
+            const root = await ctx.storage.getDirectory();
+            const fh = await root.getFileHandle("test_write.txt", { create: true });
+            const w = await fh.createWritable();
+            await w.write("package_json_fallback_active");
+            await w.close();
+            console.log("PKG_JSON_FALLBACK_OK");
+        },
+        expectCode: 0,
+        expectStdout: "PKG_JSON_FALLBACK_OK"
+    },
+    {
+        name: "[Environment] Injects host environment variables explicitly requested by string array",
+        config: { permissions: { storage: { ".": { access: "read" } }, env: ["MY_HOST_VAR"] } },
+        env: { MY_HOST_VAR: "host_injected_value" },
+        script: async (ctx: any) => {
+            const { args, env } = ctx;
+            const val = env.MY_HOST_VAR;
+            if (val !== "host_injected_value") {
+                console.error("FAILED match, got: " + val);
+                throw new Error("Missing or mapping mismatch: " + val);
+            }
+        },
+        expectCode: 0
+    },
+    {
+        name: "[Execution] Aborts runaway processes via webrun.json configurable timeout",
+        config: { permissions: { storage: { ".": { access: "read" } } }, limits: { timeoutMillis: 1000 } },
+        script: async (ctx: any) => {
+            const { args, env } = ctx;
+            // Intentionally block the thread loop
+            while (true) { }
+        },
+        // Deno's AbortSignal.timeout kill emits 143 (SIGTERM)
+        expectCode: 143
+    },
+    {
+        name: "[StorageManager / Polyfill] Writable stream supports W3C positional writes and truncation",
+        config: { permissions: { storage: { ".": { access: "read" }, "data": { access: "write" } } } },
+        files: { "data/.keep": "" },
+        cwd: "data",
+        main: "data/test.js",
+        script: async (ctx: any) => {
+            const { args, env } = ctx;
+            const root = await ctx.storage.getDirectory();
+            const fh = await root.getFileHandle("positional.txt", { create: true });
+
+            // 1. Write initial payload
+            const w1 = await fh.createWritable();
+            await w1.write("hello world");
+            await w1.close();
+
+            // 2. Overwrite middle bytes
+            const w2 = await fh.createWritable({ keepExistingData: true });
+            // Our polyfill opens with O_TRUNC always right now. We must simulate keepExistingData if we want true fidelity, but Deno open doesn't support keepExistingData in standard Web API. Wait, let's just write "hello world", seek back, and write "juno".
+
+            const w3 = await fh.createWritable();
+            await w3.write("hello world");
+            await w3.write({ type: "write", position: 0, data: "juno " });
+            await w3.close();
+
+            const r = await fh.getFile();
+            const text = await r.text();
+            if (text !== "juno  world") throw new Error("Positional write failed: " + text);
+
+            const w4 = await fh.createWritable();
+            await w4.write("truncate_me_down");
+            await w4.truncate(8);
+            await w4.close();
+
+            const r2 = await fh.getFile();
+            const text2 = await r2.text();
+            if (text2 !== "truncate") throw new Error("Truncate failed: " + text2);
+        },
+        expectCode: 0
+    },
+    {
+        name: "[StorageManager / Polyfill] File yields a standard ReadableStream for W3C memory-safe chunking",
+        config: { permissions: { storage: { ".": { access: "read" }, "data": { access: "write" } } } },
+        files: { "data/.keep": "" },
+        cwd: "data",
+        main: "data/test.js",
+        script: async (ctx: any) => {
+            const { args, env } = ctx;
+            const root = await ctx.storage.getDirectory();
+            const fh = await root.getFileHandle("stream.txt", { create: true });
+            const w = await fh.createWritable();
+            await w.write("streaming_data_test");
+            await w.close();
+
+            const file = await fh.getFile();
+            if (!(file instanceof Blob)) throw new Error("getFile() must return a Blob subclass");
+            if (file.size !== 19) throw new Error("File size metadata is incorrect");
+
+            const stream = file.stream();
+            const reader = stream.getReader();
+            const { value, done } = await reader.read();
+
+            if (done) throw new Error("Stream closed prematurely");
+            const text = new TextDecoder().decode(value);
+            if (text !== "streaming_data_test") throw new Error("Stream chunk data mismatch: " + text);
+        },
+        expectCode: 0
+    },
+    {
+        name: "[StorageManager / Polyfill] Evaluates strict W3C naming constraints locally to explicitly block path traversal injections",
+        config: { permissions: { storage: { ".": { access: "read" }, "data": { access: "write" } } } },
+        files: { "data/.keep": "" },
+        cwd: "data",
+        main: "data/test.js",
+        script: async (ctx: any) => {
+            const { args, env } = ctx;
+            const root = await ctx.storage.getDirectory();
+            try {
+                await root.getFileHandle("../../etc/passwd");
+            } catch (e: any) {
+                if (e.name === "SecurityError") {
+                    console.log("BLOCKED_TRAVERSAL");
+                    return;
+                }
+                throw e;
+            }
+            throw new Error("Failed to block traversal");
+        },
+        expectCode: 0,
+        expectStdout: "BLOCKED_TRAVERSAL"
+    },
+    {
+        name: "[StorageManager / Polyfill] Formally resolves recursive directory structures structurally using getDirectoryHandle",
+        config: { permissions: { storage: { ".": { access: "read" }, "data": { access: "write" } } } },
+        files: { "data/.keep": "" },
+        cwd: "data",
+        main: "data/test.js",
+        script: async (ctx: any) => {
+            const { args, env } = ctx;
+            const root = await ctx.storage.getDirectory();
+            const subDir = await root.getDirectoryHandle("nested_dir", { create: true });
+            if (subDir.name !== "nested_dir" || subDir.kind !== "directory") throw new Error("Directory handle invalid");
+
+            const file = await subDir.getFileHandle("deep_file.txt", { create: true });
+            const writable = await file.createWritable();
+            const writer = writable.getWriter();
+            await writer.write("deep_data");
+            await writer.close();
+
+            const r = await file.getFile();
+            const text = await r.text();
+            if (text !== "deep_data") throw new Error("Deep file data mismatch");
+
+            console.log("NESTED_SUCCESS");
+        },
+        expectCode: 0,
+        expectStdout: "NESTED_SUCCESS"
+    },
+    {
+        name: "[StorageManager / Polyfill] Gracefully tears down local artifacts via removeEntry bindings dynamically",
+        config: { permissions: { storage: { ".": { access: "read" }, "data": { access: "write" } } } },
+        files: { "data/.keep": "" },
+        cwd: "data",
+        main: "data/test.js",
+        script: async (ctx: any) => {
+            const { args, env } = ctx;
+            const root = await ctx.storage.getDirectory();
+
+            await root.getFileHandle("to_delete.txt", { create: true });
+            await root.removeEntry("to_delete.txt");
+
+            try {
+                await root.getFileHandle("to_delete.txt", { create: false });
+            } catch (e: any) {
+                if (e.name === "NotFoundError") {
+                    console.log("REMOVED_SUCCESS");
+                    return;
+                }
+                throw e;
+            }
+            throw new Error("File was not removed");
+        },
+        expectCode: 0,
+        expectStdout: "REMOVED_SUCCESS"
+    },
+    {
+        name: "[StorageManager / Polyfill] Preserves existing data when keepExistingData is true",
+        config: { permissions: { storage: { ".": { access: "read" }, "data": { access: "write" } } } },
+        files: { "data/.keep": "" },
+        cwd: "data",
+        main: "data/test.js",
+        script: async (ctx: any) => {
+            const root = await ctx.storage.getDirectory();
+            const fh = await root.getFileHandle("truncation_bug.txt", { create: true });
+
+            // 1. Write the initial base data
+            const w1 = await fh.createWritable();
+            await w1.write("abcdef");
+            await w1.close();
+
+            // 2. Open the file AGAIN, explicitly requesting to keep existing data
+            // W3C Standard: File remains "abcdef"
+            // Current Webrun: file.createWritable() ignores the param and truncates the file to ""
+            const w2 = await fh.createWritable({ keepExistingData: true });
+
+            // 3. Overwrite just the first 3 bytes
+            await w2.write({ type: "write", position: 0, data: "123" });
+            await w2.close();
+
+            // 4. Read the final result
+            const r = await fh.getFile();
+            const text = await r.text();
+
+            // W3C Expected text: "123def"
+            // Current Webrun text: "123" (because 'def' was truncated away)
+            if (text !== "123def") {
+                throw new Error(`keepExistingData failed! Expected '123def', got '${text}'`);
+            }
+
+            console.log("SUCCESS");
+        },
+        expectCode: 0,
+        expectStdout: "SUCCESS"
+    },
+    {
+        name: "[enclave / security] Blocks resolving malicious symlinks that point outside the enclave proactively",
+        config: { permissions: { storage: { ".": { access: "read" } } } },
+        preflight: async (runDir: string) => {
+            Deno.symlinkSync("/etc/passwd", join(runDir, "malicious_link"));
+        },
+        script: async (ctx: any) => {
+            const root = await ctx.storage.getDirectory();
+            try {
+                // If it resolves outside the enclave safely it throws SecurityError
+                const fh = await root.getFileHandle("malicious_link");
+                // If an attacker calls .getFile() directly on it
+                await fh.getFile();
+            } catch (e: any) {
+                if (e.name === "SecurityError") {
+                    console.log("SYMLINK_BLOCKED");
+                    return;
+                }
+                throw e;
+            }
+            throw new Error("Symlink was not blocked");
+        },
+        expectCode: 0,
+        expectStdout: "SYMLINK_BLOCKED"
+    },
+    {
+        name: "[StorageManager / Polyfill] Directory yields async iterator for keys/values/entries",
+        config: { permissions: { storage: { ".": { access: "read" }, "data": { access: "write" } } } },
+        files: { "data/.keep": "" },
+        cwd: "data",
+        main: "data/test.js",
+        script: async (ctx: any) => {
+            const root = await ctx.storage.getDirectory();
+            await root.getFileHandle("file_a.txt", { create: true });
+            await root.getDirectoryHandle("dir_b", { create: true });
+
+            const entries = [];
+            for await (const [name, handle] of root.entries()) {
+                entries.push(`${name}:${handle.kind}`);
+            }
+
+            const keys = [];
+            for await (const name of root.keys()) keys.push(name);
+
+            const values = [];
+            for await (const handle of root.values()) values.push(handle.kind);
+
+            const defaultIter = [];
+            for await (const [name, handle] of root) defaultIter.push(name);
+
+            if (!entries.includes("file_a.txt:file") || !entries.includes("dir_b:directory")) throw new Error("entries() failed");
+            if (!keys.includes("file_a.txt") || !keys.includes("dir_b")) throw new Error("keys() failed");
+            if (!values.includes("file") || !values.includes("directory")) throw new Error("values() failed");
+            if (!defaultIter.includes("file_a.txt") || !defaultIter.includes("dir_b")) throw new Error("[Symbol.asyncIterator]() failed");
+
+            console.log("ITERATORS_OK");
+        },
+        expectCode: 0,
+        expectStdout: "ITERATORS_OK"
+    },
+    {
+        name: "[StorageManager / Polyfill] Handles support isSameEntry and resolve",
+        config: { permissions: { storage: { ".": { access: "read" }, "data": { access: "write" } } } },
+        files: { "data/.keep": "" },
+        cwd: "data",
+        main: "data/test.js",
+        script: async (ctx: any) => {
+            const root = await ctx.storage.getDirectory();
+            const subDir = await root.getDirectoryHandle("nested_dir", { create: true });
+            const fh1 = await subDir.getFileHandle("target.txt", { create: true });
+            const fh2 = await subDir.getFileHandle("target.txt", { create: false });
+            const subDir2 = await root.getDirectoryHandle("nested_dir", { create: false });
+
+            if (!(await fh1.isSameEntry(fh2))) throw new Error("isSameEntry false negative for identical files");
+            if (await fh1.isSameEntry(subDir)) throw new Error("isSameEntry false positive for different kinds");
+            if (!(await subDir.isSameEntry(subDir2))) throw new Error("isSameEntry false negative for identical directories");
+
+            const resolvePath = await root.resolve(fh1);
+            if (!resolvePath || resolvePath.join("/") !== "nested_dir/target.txt") throw new Error("resolve() failed to build relative path");
+
+            const outsideResolve = await subDir.resolve(root);
+            if (outsideResolve !== null) throw new Error("resolve() should return null for non-descendants");
+
+            console.log("HANDLES_OK");
+        },
+        expectCode: 0,
+        expectStdout: "HANDLES_OK"
+    },
+    {
+        name: "[StorageManager / Polyfill] File arrayBuffer() resolves correctly",
+        config: { permissions: { storage: { ".": { access: "read" }, "data": { access: "write" } } } },
+        files: { "data/.keep": "" },
+        cwd: "data",
+        main: "data/test.js",
+        script: async (ctx: any) => {
+            const root = await ctx.storage.getDirectory();
+            const fh = await root.getFileHandle("binary.bin", { create: true });
+            const w = await fh.createWritable();
+            await w.write(new Uint8Array([0x01, 0x02, 0x03]));
+            await w.close();
+
+            const file = await fh.getFile();
+            const buf = await file.arrayBuffer();
+            const view = new Uint8Array(buf);
+
+            if (view.length !== 3 || view[0] !== 1 || view[1] !== 2 || view[2] !== 3) {
+                throw new Error("arrayBuffer() corrupted data");
+            }
+            console.log("ARRAYBUFFER_OK");
+        },
+        expectCode: 0,
+        expectStdout: "ARRAYBUFFER_OK"
+    },
+    {
+        name: "[StorageManager / Polyfill] removeEntry safely recurses on populated directories",
+        config: { permissions: { storage: { ".": { access: "read" }, "data": { access: "write" } } } },
+        files: { "data/.keep": "" },
+        cwd: "data",
+        main: "data/test.js",
+        script: async (ctx: any) => {
+            const root = await ctx.storage.getDirectory();
+            const populated = await root.getDirectoryHandle("populated", { create: true });
+            const fh = await populated.getFileHandle("deep.txt", { create: true });
+            const w = await fh.createWritable();
+            await w.write("test");
+            await w.close();
+
+            await root.removeEntry("populated", { recursive: true });
+
+            try {
+                await root.getDirectoryHandle("populated", { create: false });
+            } catch (e: any) {
+                if (e.name === "NotFoundError") {
+                    console.log("RECURSIVE_REMOVE_OK");
+                    return;
+                }
+                throw e;
+            }
+            throw new Error("Populated directory not removed");
+        },
+        expectCode: 0,
+        expectStdout: "RECURSIVE_REMOVE_OK"
+    },
+    {
+        name: "[Import Map] Valid Import Map Resolution",
+        config: { importMap: "import_map.json", permissions: { storage: { ".": { access: "read" } } } },
+        files: {
+            "import_map.json": JSON.stringify({ imports: { "@lib/": "./shared_lib/" } }),
+            "shared_lib/math.ts": "export function add(a, b) { return a + b; }",
+        },
+        script: `
+            import { add } from "@lib/math.ts";
+            export default async function(ctx) {
+                if (add(2, 3) !== 5) throw new Error("Math failed");
+                console.log("IMPORT_SUCCESS");
+            }
+        `,
+        expectCode: 0,
+        expectStdout: "IMPORT_SUCCESS"
+    },
+    {
+        name: "[Import Map] Sandbox I/O Integrity (The Breakout Attempt)",
+        config: { importMap: "import_map.json", permissions: { storage: { ".": { access: "read" } } } },
+        files: {
+            "import_map.json": JSON.stringify({ imports: { "@lib/": "./shared_lib/" } }),
+            "shared_lib/math.ts": "export function add(a, b) { return a + b; }",
+        },
+        script: `
+            import { add } from "@lib/math.ts";
+            export default async function(ctx) {
+                if (add(2, 3) !== 5) throw new Error("Math failed");
+                
+                const root = await ctx.storage.getDirectory();
+                try {
+                    await root.getFileHandle("shared_lib/math.ts");
+                } catch (e) {
+                    if (e.name === "SecurityError" || e.name === "NotFoundError" || e.name === "TypeError") { // Enclave blocks
+                        console.error("BLOCKED:", e.message);
+                        throw e;
+                    }
+                }
+                throw new Error("Breakout succeeded");
+            }
+        `,
+        expectCode: 1,
+        expectStderr: "BLOCKED:"
+    },
+    {
+        name: "[Security] Global Deno Namespace Destruction",
+        config: { permissions: { storage: { ".": { access: "read" } } } },
+        script: `
+            export default async function(ctx) {
+                if (typeof Deno !== "undefined") {
+                    console.error("BLOCKED: Deno namespace still exists!");
+                    throw new Error("Deno namespace exists");
+                }
+                if (globalThis.Deno !== undefined) {
+                    console.error("BLOCKED: globalThis.Deno still exists!");
+                    throw new Error("globalThis.Deno exists");
+                }
+                console.log("DENO_DESTROYED");
+            }
+        `,
+        expectCode: 0,
+        expectStdout: "DENO_DESTROYED"
+    },
+    {
+        name: "[Import Map] Node Sinkhole Preservation",
+        config: { importMap: "import_map.json", permissions: { storage: { ".": { access: "read" } } } },
+        files: {
+            "import_map.json": JSON.stringify({ imports: {} })
+        },
+        script: `
+            import fs from "node:fs";
+            export default async function(ctx) {
+                console.log("WE SHOULD NOT REACH THIS");
+            }
+        `,
+        expectCode: 1,
+        expectStderr: "Node/NPM modules are blocked"
+    },
+    {
+        name: "[Import Map] Proves importing from import map does not subvert user storage permissions",
+        config: { importMap: "import_map.json", permissions: { storage: { "src": { access: "read" } } } },
+        files: {
+            "import_map.json": JSON.stringify({ imports: { "@lib/": "./lib/" } }),
+            "lib/math.ts": "export const MAGIC = 42;"
+        },
+        cwd: "src",
+        main: "src/test.js",
+        script: `
+            import { MAGIC } from "@lib/math.ts";
+            export default async function(ctx) {
+                console.log("SECRET_READ:", MAGIC);
+            }
+        `,
+        expectCode: 1,
+        expectStderr: "Requires read access to"
+    },
+    {
+        name: "[OPFS / navigator.storage] Provides an isolated workspace accessible via getDirectory()",
+        config: {},
+        script: async (ctx: any) => {
+            const root = await navigator.storage.getDirectory();
+            const fh = await root.getFileHandle("opfs_test.txt", { create: true });
+            const w = await fh.createWritable();
+            await w.write("opfs_isolated_data");
+            await w.close();
+
+            const r = await fh.getFile();
+            const text = await r.text();
+
+            if (text !== "opfs_isolated_data") throw new Error("OPFS read/write mismatch");
+
+            const isPersisted = await navigator.storage.persisted();
+            if (isPersisted !== false) throw new Error("OPFS should report as not persisted");
+
+            console.log("OPFS_OK");
+        },
+        expectCode: 0,
+        expectStdout: "OPFS_OK"
+    },
+    {
+        name: "[Security] Blocks env permission escalation",
+        files: {
+            "webrun.json": JSON.stringify({ permissions: { env: ["A"] } }),
+            "child/webrun.json": JSON.stringify({ permissions: { env: ["A", "B"] } }),
+            "child/test.js": "export default async function() { console.log('ESCAPED'); }",
+        },
+        cwd: "child",
+        main: "child/test.js",
+        expectCode: 1,
+        expectStderr: "escalate 'env' permissions"
+    },
+    {
+        name: "[Security] Blocks network permission escalation",
+        files: {
+            "webrun.json": JSON.stringify({ permissions: { network: ["a.com"] } }),
+            "child/webrun.json": JSON.stringify({ permissions: { network: ["b.com"] } }),
+            "child/test.js": "export default async function() { console.log('ESCAPED'); }",
+        },
+        cwd: "child",
+        main: "child/test.js",
+        expectCode: 1,
+        expectStderr: "escalate 'network' permissions"
+    },
+    {
+        name: "[Security] Blocks storage path escalation",
+        files: {
+            "webrun.json": JSON.stringify({ permissions: { storage: { "child": { access: "read" } } } }),
+            "child/webrun.json": JSON.stringify({ permissions: { storage: { "../sibling": { access: "read" } } } }),
+            "child/test.js": "export default async function() { console.log('ESCAPED'); }",
+        },
+        cwd: "child",
+        main: "child/test.js",
+        expectCode: 1,
+        expectStderr: "escalate 'storage' permissions"
+    },
+    {
+        name: "[Security] Blocks storage write escalation over read parent",
+        files: {
+            "webrun.json": JSON.stringify({ permissions: { storage: { "child": { access: "read" } } } }),
+            "child/webrun.json": JSON.stringify({ permissions: { storage: { ".": { access: "write" } } } }),
+            "child/test.js": "export default async function() { console.log('ESCAPED'); }",
+        },
+        cwd: "child",
+        main: "child/test.js",
+        expectCode: 1,
+        expectStderr: "escalate 'storage' permissions"
+    },
+    {
+        name: "[Security] Blocks timeoutMillis limit escalation",
+        files: {
+            "webrun.json": JSON.stringify({ limits: { timeoutMillis: 500 } }),
+            "child/webrun.json": JSON.stringify({ limits: { timeoutMillis: 1000 } }),
+            "child/test.js": "export default async function() { console.log('ESCAPED'); }",
+        },
+        cwd: "child",
+        main: "child/test.js",
+        expectCode: 1,
+        expectStderr: "escalate 'timeoutMillis' limit"
+    },
+    {
+        name: "[Security] Blocks memoryMB limit escalation",
+        files: {
+            "webrun.json": JSON.stringify({ limits: { memoryMB: 128 } }),
+            "child/webrun.json": JSON.stringify({ limits: { memoryMB: 256 } }),
+            "child/test.js": "export default async function() { console.log('ESCAPED'); }",
+        },
+        cwd: "child",
+        main: "child/test.js",
+        expectCode: 1,
+        expectStderr: "escalate 'memoryMB' limit"
+    },
+    {
+        name: "[Security] Permits valid narrowing of parent timeoutMillis limit",
+        files: {
+            "webrun.json": JSON.stringify({ limits: { timeoutMillis: 5000 } }),
+            "child/webrun.json": JSON.stringify({ limits: { timeoutMillis: 100 } }),
+        },
+        cwd: "child",
+        main: "child/test.js",
+        script: `
+            export default async function(ctx) {
+                // Spin forever to trigger the 100ms timeout
+                while(true) {}
+            }
+        `,
+        expectCode: 143
+    },
+    {
+        name: "[Security] Permits valid narrowing of parent memoryMB limit",
+        files: {
+            "webrun.json": JSON.stringify({ limits: { memoryMB: 1024 } }),
+            "child/webrun.json": JSON.stringify({ limits: { memoryMB: 256 } }),
+        },
+        cwd: "child",
+        main: "child/test.js",
+        script: `
+            export default async function(ctx) {
+                const a = [];
+                // Consume memory asynchronously so the RSS scanner interval can tick
+                return new Promise((resolve) => {
+                    setInterval(() => {
+                        for(let i=0; i<100; i++) {
+                            // Allocate ~100MB total per tick
+                            a.push(new Uint8Array(1024 * 1024));
+                        }
+                    }, 5);
+                });
+            }
+        `,
+        expectCode: 137,
+        expectStderr: "FATAL OOM"
+    },
+    {
+        name: "[Security] Permits valid narrowing of parent configuration and strictly enforces it",
+        files: {
+            "webrun.json": JSON.stringify({
+                permissions: {
+                    env: ["A", "B"],
+                    network: ["a.com", "b.com"],
+                    storage: { ".": { access: "write" } }
+                },
+                limits: { timeoutMillis: 10000, memoryMB: 512 }
+            }),
+            "child/webrun.json": JSON.stringify({
+                permissions: {
+                    env: ["A"],
+                    network: ["a.com"],
+                    storage: {
+                        ".": { access: "read" },
+                        "narrow_dir": { access: "write" }
+                    }
+                },
+                limits: { timeoutMillis: 5000, memoryMB: 256 }
+            }),
+            "child/narrow_dir/.keep": ""
+        },
+        script: `
+            export default async function(ctx) {
+                const { env, storage } = ctx;
+                
+                if (env.B !== undefined) throw new Error("Env B leaked");
+                if (env.A !== "secret") throw new Error("Env A missing");
+                
+                const root = await storage.getDirectory();
+                
+                // 1. Should fail to write to PWD (since narrowed to read-only)
+                let blocked = false;
+                try {
+                    const file = await root.getFileHandle("test_write.txt", { create: true });
+                    const w = await file.createWritable();
+                    await w.close();
+                } catch (e) {
+                    blocked = true; // Deno PermissionDenied
+                }
+                if (!blocked) throw new Error("Successfully wrote to read-only PWD");
+                
+                // 2. Should succeed writing to narrow_dir (granted write access)
+                const narrow = await root.getDirectoryHandle("narrow_dir");
+                const file = await narrow.getFileHandle("ok.txt", { create: true });
+                const w = await file.createWritable();
+                await w.write("val");
+                await w.close();
+                
+                console.log("NARROW_SUCCESS");
+            }
+        `,
+        env: { "A": "secret", "B": "leaked" },
+        cwd: "child",
+        main: "child/test.js",
+        expectCode: 0,
+        expectStdout: "NARROW_SUCCESS"
+    },
+    {
+        name: "[Security] Aborts if policy allows writing to the webrun executable directory",
+        preflight: async (runDir: string) => {
+            const join = (await import("https://deno.land/std@0.224.0/path/mod.ts")).join;
+            const workerBin = Deno.env.get("WEBRUN_BIN") || join(Deno.cwd(), "webrun");
+            const binDir = workerBin.substring(0, workerBin.lastIndexOf("/")) || "/";
+            const cfg = { permissions: { storage: { [binDir]: { access: "write" } } } };
+            Deno.writeTextFileSync(join(runDir, "webrun.json"), JSON.stringify(cfg));
+        },
+        script: `
+            export default async function(ctx) {
+                console.log("ESCAPED");
+            }
+        `,
+        expectCode: 1,
+        expectStderr: "SECURITY FATAL: webrun executable"
+    },
+    {
+        name: "[Security] Aborts if policy allows writing to the top-level webrun.json directory",
+        files: {
+            "webrun.json": JSON.stringify({ permissions: { storage: { ".": { access: "write" } } } })
+        },
+        script: `
+            export default async function(ctx) {
+                console.log("ESCAPED");
+            }
+        `,
+        expectCode: 1,
+        expectStderr: "SECURITY FATAL: webrun executable"
+    },
+    {
+        name: "[Security] Aborts if policy allows writing to a child webrun.json directory",
+        files: {
+            "webrun.json": JSON.stringify({ permissions: { storage: { "child": { access: "write" } } } }),
+            "child/webrun.json": JSON.stringify({ permissions: { storage: { ".": { access: "write" } } } }),
+            "child/test.js": "export default async function(ctx) { console.log('ESCAPED'); }"
+        },
+        cwd: "child",
+        main: "child/test.js",
+        expectCode: 1,
+        expectStderr: "SECURITY FATAL: webrun executable"
+    },
+    {
+        name: "[CLI] Prints help screen when --help is passed",
+        args: ["--help"],
+        script: `export default async function() {}`,
+        expectCode: 0,
+        expectStdout: "WEBRUN API CONTRACT"
+    }
+];
+
+import { assertEquals, assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { resolve, join, dirname } from "https://deno.land/std@0.224.0/path/mod.ts";
+
+
+const WORKER_BIN = Deno.env.get("WEBRUN_BIN") || resolve(Deno.cwd(), "webrun");
+
+// ==========================================
+// TEST EXECUTOR
+// ==========================================
+for (const t of tests) {
+    Deno.test({
+        name: t.name,
+        async fn() {
+            const runDir = Deno.realPathSync(Deno.makeTempDirSync({ prefix: "sandbox_tb_" }));
+
+            if (t.config) {
+                Deno.writeTextFileSync(join(runDir, "webrun.json"), JSON.stringify(t.config));
+            }
+
+            if (t.files) {
+                for (const [relPath, content] of Object.entries(t.files)) {
+                    const absPath = join(runDir, relPath);
+                    Deno.mkdirSync(dirname(absPath), { recursive: true });
+                    Deno.writeTextFileSync(absPath, content);
+                }
+            }
+
+            const srcDir = join(runDir, "src");
+            Deno.mkdirSync(srcDir, { recursive: true });
+
+            const scriptPath = t.main || "src/test.js";
+            const absScriptPath = join(runDir, scriptPath);
+            Deno.mkdirSync(dirname(absScriptPath), { recursive: true });
+
+            if (t.preflight) {
+                await t.preflight(runDir);
+            }
+
+            if (t.script) {
+                const scriptContent = typeof t.script === "function" ?
+                    `export async function testMain(t, ctx) { await (${t.script.toString()})(ctx, t); }` :
+                    (t.script as string).replace(/export default\s+(?:async\s+)?function\s*\(([^)]*)\)/, "export async function testMain(t, $1)");
+                Deno.writeTextFileSync(absScriptPath, scriptContent);
+            }
+            const testCwd = t.cwd ? join(runDir, t.cwd) : runDir;
+            const cmd = new Deno.Command(WORKER_BIN, {
+                args: ["--test", absScriptPath, ...(t.args || [])],
+                cwd: testCwd,
+                env: t.env,
+                stdout: "piped",
+                stderr: "piped"
+            });
+
+            const output = await cmd.output();
+            const stdout = new TextDecoder().decode(output.stdout);
+            const stderr = new TextDecoder().decode(output.stderr);
+
+            // Clean up ephemeral logic
+            try { Deno.removeSync(runDir, { recursive: true }); } catch (_) { }
+
+            if (t.expectCode === "nonzero") {
+                if (output.code === 0) {
+                    console.error(`[${t.name}] FAILED. Expected non-zero code, got 0`);
+                    console.error("STDOUT:", stdout);
+                    console.error("STDERR:", stderr);
+                    throw new Error("Expected non-zero exit code");
+                }
+            } else {
+                if (output.code !== t.expectCode) {
+                    console.error(`[${t.name}] FAILED. Expected code ${t.expectCode}, got ${output.code}`);
+                    console.error("STDOUT:", stdout);
+                    console.error("STDERR:", stderr);
+                }
+                assertEquals(output.code, t.expectCode);
+            }
+
+            const combinedOutput = stdout + "\n" + stderr;
+
+            if (t.expectStdout) {
+                assertStringIncludes(combinedOutput, t.expectStdout);
+            }
+            if (t.expectStderr) {
+                assertStringIncludes(combinedOutput, t.expectStderr);
+            }
+        }
+    });
+}
+
+Deno.test({
+    name: "[CLI] Bundling and Unbundling maintains structural integrity",
+    ignore: Deno.env.get("CW_IS_REPACKED_TEST") === "1",
+    async fn() {
+        const runDir = Deno.realPathSync(Deno.makeTempDirSync({ prefix: "sandbox_tb_" }));
+
+        const isBundled = Deno.readTextFileSync(WORKER_BIN).includes("\n__DATA__\n");
+        let bundledExecutable = WORKER_BIN;
+
+        if (!isBundled) {
+            const workspaceDir = dirname(WORKER_BIN);
+            const bundle1Cmd = new Deno.Command(WORKER_BIN, {
+                args: ["--self-bundle"],
+                cwd: workspaceDir,
+                stdout: "piped"
+            });
+            const bundle1Output = await bundle1Cmd.output();
+            assertEquals(bundle1Output.code, 0);
+            Deno.writeFileSync(join(runDir, "first_bundle"), bundle1Output.stdout);
+            Deno.chmodSync(join(runDir, "first_bundle"), 0o755);
+            bundledExecutable = join(runDir, "first_bundle");
+        }
+
+        const unbundleCmd = new Deno.Command(bundledExecutable, {
+            args: ["--self-unbundle", join(runDir, "src_out")],
+        });
+        const unbundleOutput = await unbundleCmd.output();
+        assertEquals(unbundleOutput.code, 0);
+
+        const bundle2Cmd = new Deno.Command(join(runDir, "src_out", "webrun"), {
+            args: ["--self-bundle"],
+            cwd: join(runDir, "src_out"),
+            stdout: "piped"
+        });
+        const bundleOutput = await bundle2Cmd.output();
+        assertEquals(bundleOutput.code, 0);
+        Deno.writeFileSync(join(runDir, "webrun-repacked"), bundleOutput.stdout);
+        Deno.chmodSync(join(runDir, "webrun-repacked"), 0o755);
+
+        const evalCmd = new Deno.Command(join(runDir, "webrun-repacked"), {
+            args: ["--self-test"],
+            env: {
+                "CW_IS_REPACKED_TEST": "1",
+                "DENO_INSTALL_DIR": dirname(Deno.execPath())
+            }
+        });
+        const evalOutput = await evalCmd.output();
+        if (evalOutput.code !== 0) {
+            console.error(new TextDecoder().decode(evalOutput.stderr));
+            console.error(new TextDecoder().decode(evalOutput.stdout));
+        }
+        assertEquals(evalOutput.code, 0);
+
+        try { Deno.removeSync(runDir, { recursive: true }); } catch (_) { }
+    }
+});
