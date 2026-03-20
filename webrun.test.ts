@@ -970,6 +970,13 @@ export const tests: TestCase[] = [
         expectCode: 0,
     },
     {
+        name: "[CLI] Prints version when --version is passed",
+        args: ["--version"],
+        script: `export default async function() {}`,
+        expectCode: 0,
+        expectStdout: "webrun dev"
+    },
+    {
         name: "[Security] Blocks import maps within a writable directory proactively",
         config: { importMap: "my_import_map.json", permissions: { storage: { ".": { access: "write" } } } },
         files: {

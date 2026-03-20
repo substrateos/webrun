@@ -798,6 +798,12 @@ export async function spawnSandboxProcess(cwd: string, args: string[]) {
 
     const MAX_V8_MEM_MB = config.limits?.memoryMB || 512;
 
+    // Version Check
+    if (args.includes("--version") || args.includes("-v")) {
+        console.log(`webrun ${Deno.env.get("WEBRUN_VERSION") || "dev"}`);
+        Deno.exit(0);
+    }
+
     // Help Command Evaluation
     if (args.includes("--help") || args.includes("-h")) {
         try {

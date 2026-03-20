@@ -1,0 +1,30 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*' # Trigger on tags like v1.0.0, v2.1.3, etc.
+
+jobs:
+  build-and-release:
+    name: Build & Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # Grants the action permission to publish a release
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Pack the bundled script
+        run: |
+          sed -i "s/WEBRUN_VERSION=\"dev\"/WEBRUN_VERSION=\"${GITHUB_REF_NAME}\"/" webrun
+          mkdir -p dist
+          ./webrun --self-bundle > dist/webrun
+          chmod +x dist/webrun
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/webrun
+          generate_release_notes: true
