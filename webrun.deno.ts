@@ -226,7 +226,7 @@ export function generateSeatbeltProfile(cwd: string, readEnclaves: string, write
 `;
 }
 
-export function buildNodeSinkholeDependencies(isolatedTmp: string, configDir: string, importMapPath?: string): string {
+export function buildNodeSinkholeDependencies(isolatedTmp: string, importMapPaths: string[] = []): string {
     const sinkholeURI = "data:text/javascript,export default null; throw new Error('Security Error: Node/NPM modules are blocked.');";
     const importMapPayload: any = {
         imports: {
@@ -240,16 +240,15 @@ export function buildNodeSinkholeDependencies(isolatedTmp: string, configDir: st
         scopes: {}
     };
 
-    if (importMapPath) {
+    for (const absMapPath of importMapPaths) {
         try {
-            const userImportMapPath = resolve(configDir, importMapPath);
-            const userMap = JSON.parse(Deno.readTextFileSync(userImportMapPath));
+            const userMap = JSON.parse(Deno.readTextFileSync(absMapPath));
 
             const rewriteToAbsolute = (obj: Record<string, string>) => {
                 if (!obj) return;
                 for (const [key, value] of Object.entries(obj)) {
                     if (value.startsWith("./") || value.startsWith("../")) {
-                        let resolved = "file://" + resolve(dirname(userImportMapPath), value);
+                        let resolved = "file://" + resolve(dirname(absMapPath), value);
                         if (value.endsWith("/") && !resolved.endsWith("/")) resolved += "/";
                         obj[key] = resolved;
                     }
@@ -264,11 +263,21 @@ export function buildNodeSinkholeDependencies(isolatedTmp: string, configDir: st
             if (userMap.scopes) {
                 for (const [scopeKey, scopeValue] of Object.entries(userMap.scopes)) {
                     rewriteToAbsolute(scopeValue as any);
+                    let resolvedScopeKey = scopeKey;
+                    if (scopeKey.startsWith("./") || scopeKey.startsWith("../")) {
+                        resolvedScopeKey = "file://" + resolve(dirname(absMapPath), scopeKey);
+                        if (scopeKey.endsWith("/") && !resolvedScopeKey.endsWith("/")) {
+                            resolvedScopeKey += "/";
+                        }
+                    }
+                    if (!importMapPayload.scopes[resolvedScopeKey]) {
+                        importMapPayload.scopes[resolvedScopeKey] = {};
+                    }
+                    Object.assign(importMapPayload.scopes[resolvedScopeKey], scopeValue);
                 }
-                Object.assign(importMapPayload.scopes, userMap.scopes);
             }
         } catch (e: any) {
-            console.error(`Warning: Failed to parse or merge importMap at ${importMapPath}: ${e.message}`);
+            console.error(`Warning: Failed to parse or merge importMap at ${absMapPath}: ${e.message}`);
         }
     }
 
@@ -516,7 +525,7 @@ export function createStorageManager(storageRoot: string, fallbackToTemp: boolea
 // 4. IMPURE: EXECUTION LIFECYCLES
 // =========================================================
 
-export function resolveLocalConfiguration(currentDir: string): { config: WebrunConfig, configDir: string, configFound: boolean, configPaths: string[] } {
+export function resolveLocalConfiguration(currentDir: string): { config: WebrunConfig, configDir: string, configFound: boolean, configPaths: string[], importMapPaths: string[] } {
     let configDir = currentDir;
 
     const allConfigs: { config: WebrunConfig, dir: string, path: string }[] = [];
@@ -560,7 +569,8 @@ export function resolveLocalConfiguration(currentDir: string): { config: WebrunC
         if (parent === configDir) break;
         configDir = parent;
     }
-
+        
+    const importMapPaths: string[] = [];
     const finalConfig: WebrunConfig = { limits: { timeoutMillis: 120000, memoryMB: 512 }, permissions: { storage: {}, network: [], env: [] } };
     let finalConfigDir = currentDir;
     let configFound = false;
@@ -627,9 +637,16 @@ export function resolveLocalConfiguration(currentDir: string): { config: WebrunC
             }
         }
 
-        // Apply most specific config permissions & importMap
+        // Apply most specific config permissions
         Object.assign(finalConfig.permissions!, mostSpecific.config.permissions);
-        if (mostSpecific.config.importMap) finalConfig.importMap = mostSpecific.config.importMap;
+
+        // Collect all importMap paths from root down to child
+        for (let i = allConfigs.length - 1; i >= 0; i--) {
+            const cfg = allConfigs[i].config;
+            if (cfg.importMap) {
+                importMapPaths.push(resolve(allConfigs[i].dir, cfg.importMap));
+            }
+        }
 
         // Apply limits strictly narrowing from all levels
         for (let i = allConfigs.length - 1; i >= 0; i--) {
@@ -641,7 +658,7 @@ export function resolveLocalConfiguration(currentDir: string): { config: WebrunC
         }
     }
 
-    return { config: finalConfig, configDir: finalConfigDir, configFound, configPaths: allConfigs.map(c => c.path) };
+    return { config: finalConfig, configDir: finalConfigDir, configFound, configPaths: allConfigs.map(c => c.path), importMapPaths };
 }
 
 
@@ -777,7 +794,7 @@ export async function spawnSandboxProcess(cwd: string, args: string[]) {
     const isolatedTmp = Deno.realPathSync(Deno.makeTempDirSync({ prefix: 'sandbox_tmp_' }));
     const runnerTmp = Deno.realPathSync(Deno.makeTempDirSync({ prefix: 'webrun_runner_' }));
     const opfsTmp = Deno.realPathSync(Deno.makeTempDirSync({ prefix: 'webrun_opfs_' }));
-    const { config, configDir, configFound, configPaths } = resolveLocalConfiguration(cwd);
+    const { config, configDir, configFound, configPaths, importMapPaths } = resolveLocalConfiguration(cwd);
 
     const MAX_V8_MEM_MB = config.limits?.memoryMB || 512;
 
@@ -809,7 +826,7 @@ export async function spawnSandboxProcess(cwd: string, args: string[]) {
     const invocation = parseCommandInvocation(args, config);
     const policy = computeStorageAccessPolicies(config.permissions?.storage || {}, configDir, cwd, isolatedTmp);
 
-    const protectedFiles: string[] = [...configPaths];
+    const protectedFiles: string[] = [...configPaths, ...importMapPaths];
     try { protectedFiles.push(Deno.realPathSync(Deno.env.get("WEBRUN_BIN") || resolve(projectRoot, "webrun"))); } catch (_) { }
     try { protectedFiles.push(Deno.realPathSync(new URL(import.meta.url).pathname)); } catch (_) { }
 
@@ -827,7 +844,7 @@ export async function spawnSandboxProcess(cwd: string, args: string[]) {
         Deno.exit(1);
     }
 
-    const importMapPath = buildNodeSinkholeDependencies(isolatedTmp, configDir, config.importMap);
+    const importMapPath = buildNodeSinkholeDependencies(isolatedTmp, importMapPaths);
 
     // 3. Compile Security Vectors
     const seatbeltReadEnclaves = policy.seatbeltReadEnclaves + `\n    (subpath "${runnerTmp}")`;

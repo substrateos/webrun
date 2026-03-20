@@ -43,7 +43,7 @@ You can strictly bound the execution of any untrusted script using the `limits` 
 
 **Hierarchical Enforcement**: If you nest a `webrun.json` inside a subdirectory, the child configuration is strictly limited by its parents. A child configuration may *narrow* limits (e.g., lower `timeoutMillis` from `5000` to `1000`), but any attempt to expand or escalate them beyond a parent's limit will trigger an immediate security abort.
 
-**Self-Overwrite Protection**: As a core safety mechanism, `webrun` automatically verifies its own executable paths, along with any discovered `webrun.json` and `package.json` configuration files. If a configuration attempts to grant `"write"` access to any directory containing these critical files, execution is immediately aborted with a `SECURITY FATAL` error. This guarantees malicious scripts cannot overwrite the sandbox runner or its boundary definitions.
+**Self-Overwrite Protection**: As a core safety mechanism, `webrun` automatically verifies its own executable paths, along with any discovered configuration files (`webrun.json`, `package.json`, and explicitly referenced `importMap` files). If a configuration attempts to grant `"write"` access to any directory containing these critical files, execution is immediately aborted with a `SECURITY FATAL` error. This guarantees malicious scripts cannot overwrite the sandbox runner or its boundary definitions.
 
 ## CACHING AND RUNTIME DOWNLOADS
 On first execution, `webrun` will automatically download an isolated Deno runtime and store it, along with extracted TypeScript code, inside `~/.cache/webrun/`. This ensures the runner is completely self-contained, avoids conflicts with any globally installed tools, and prevents pollution of your project's working tree.
@@ -66,7 +66,9 @@ On first execution, `webrun` will automatically download an isolated Deno runtim
   Extract the webrun source files from the executable into a folder for editing.
 
 ## IMPORT MAPS
-You can supply an `importMap` path in your `webrun.json` to configure module resolution mapping. `webrun` supports standard import maps, but the mapped targets are still subject to your configured permissions.
+You can supply an `importMap` path in your `webrun.json` to configure module resolution mapping. `webrun` enforces two powerful behaviors for them:
+1. **Hierarchical Merging**: If a child directory defines an `import_map.json`, `webrun` seamlessly deep-merges it top-down with all parent import maps. This allows flexible monorepo designs where a standard library remains governed by a root map, safely granting child directories override precedence for local utilities.
+2. **Immutable Guarantee**: Discovered import map files cannot reside in a folder that your sandbox has `write` access to natively. This proactive file-system protection mathematically prevents your application from accidentally mutating its own module resolution strategy.
 
 ## API / HOW TO WRITE SCRIPTS
 

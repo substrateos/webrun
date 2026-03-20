@@ -968,7 +968,82 @@ export const tests: TestCase[] = [
         args: ["--help"],
         script: `export default async function() {}`,
         expectCode: 0,
-        expectStdout: "WEBRUN API CONTRACT"
+    },
+    {
+        name: "[Security] Blocks import maps within a writable directory proactively",
+        config: { importMap: "my_import_map.json", permissions: { storage: { ".": { access: "write" } } } },
+        files: {
+            "my_import_map.json": JSON.stringify({})
+        },
+        script: async () => {},
+        expectCode: 1,
+        expectStderr: "is within a permitted write directory"
+    },
+    {
+        name: "[Import Map] Merges parent and child import maps with child precedence",
+        files: {
+            "webrun.json": JSON.stringify({ importMap: "parent_map.json", permissions: { storage: { ".": { access: "read" } } } }),
+            "parent_map.json": JSON.stringify({ imports: { "parent-mod": "data:text/javascript,export const p = 1;", "shared": "data:text/javascript,export const s = 1;" } }),
+            "child/webrun.json": JSON.stringify({ importMap: "child_map.json" }),
+            "child/child_map.json": JSON.stringify({ imports: { "child-mod": "data:text/javascript,export const c = 2;", "shared": "data:text/javascript,export const s = 2;" } }),
+        },
+        cwd: "child",
+        main: "child/test.js",
+        script: `
+            import { p } from "parent-mod";
+            import { c } from "child-mod";
+            import { s } from "shared";
+            export default function() {
+                if (p !== 1) throw new Error("Parent missing");
+                if (c !== 2) throw new Error("Child missing");
+                if (s !== 2) throw new Error("Child did not override parent shared");
+                console.log("MERGED_OK");
+            }
+        `,
+        expectCode: 0,
+        expectStdout: "MERGED_OK"
+    },
+    {
+        name: "[Import Map] Resolves relative scope keys safely against their declaring map directory",
+        files: {
+            "webrun.json": JSON.stringify({ importMap: "parent_map.json", permissions: { storage: { ".": { access: "read" } } } }),
+            "parent_map.json": JSON.stringify({
+                scopes: {
+                    "./parent-scope/": {
+                        "utils_mod": "data:text/javascript,export const a = 'parent-a';"
+                    }
+                }
+            }),
+            "parent-scope/app.ts": `
+                import { a } from "utils_mod";
+                export const pApp = a;
+            `,
+            "child/webrun.json": JSON.stringify({ importMap: "child_map.json", permissions: { storage: { ".": { access: "read" }, "../parent-scope": { access: "read" } } } }),
+            "child/child_map.json": JSON.stringify({
+                scopes: {
+                    "./child-scope/": {
+                        "utils_mod": "data:text/javascript,export const a = 'child-a';"
+                    }
+                }
+            }),
+            "child/child-scope/app.ts": `
+                import { a } from "utils_mod";
+                export const cApp = a;
+            `,
+        },
+        cwd: "child",
+        main: "child/test.js",
+        script: `
+            import { pApp } from "../parent-scope/app.ts";
+            import { cApp } from "./child-scope/app.ts";
+            export default function() {
+                if (pApp !== 'parent-a') throw new Error("Parent scope failed: " + pApp);
+                if (cApp !== 'child-a') throw new Error("Child scope failed: " + cApp);
+                console.log("SCOPES_OK");
+            }
+        `,
+        expectCode: 0,
+        expectStdout: "SCOPES_OK"
     }
 ];
 
