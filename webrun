@@ -47,9 +47,9 @@ fi
 
 DEFAULT_DENO_DIR="$CACHE_DIR/deno/deno-${DENO_VERSION}-${DENO_TARGET}-${EXPECTED_SHA}"
 
-DENO_INSTALL_DIR="${DENO_INSTALL_DIR:-$DEFAULT_DENO_DIR}"
-DENO_BIN="$DENO_INSTALL_DIR/deno"
-DENO_DIR="$DENO_INSTALL_DIR"
+WEBRUN_DENO_DIR="${WEBRUN_DENO_DIR:-$DEFAULT_DENO_DIR}"
+DENO_BIN="$WEBRUN_DENO_DIR/deno"
+DENO_DIR="$WEBRUN_DENO_DIR"
 
 if [ ! -f "$DENO_BIN" ]; then
   echo "Downloading Deno ${DENO_VERSION} for $DENO_TARGET..." >&2
@@ -144,16 +144,23 @@ if [[ "$1" == "--self-test" ]]; then
     mv "$DENO_TEST_SCRIPT" "$DENO_TEST_SCRIPT.ts"
     DENO_TEST_SCRIPT="$DENO_TEST_SCRIPT.ts"
     awk '/^__TEST_DATA__/ {flag=1; next} /^__README_DATA__/ {flag=0} flag {print}' "$SOURCE" > "$DENO_TEST_SCRIPT"
+
+    # Extract the main deno script as well
+    DENO_SCRIPT=$(mktemp)
+    mv "$DENO_SCRIPT" "$DENO_SCRIPT.ts"
+    DENO_SCRIPT="$DENO_SCRIPT.ts"
+    awk '/^__DATA__/ {flag=1; next} /^__TEST_DATA__/ {flag=0} flag {print}' "$SOURCE" > "$DENO_SCRIPT"
     
-    "$DENO_BIN" test -A --no-check $COVERAGE_FLAG "${FILTER_ARGS[@]}" "$DENO_TEST_SCRIPT"
+    WEBRUN_BIN="$WEBRUN_BIN" "$DENO_BIN" run -A --no-check $COVERAGE_FLAG "$DENO_SCRIPT" --self-test "$DENO_TEST_SCRIPT" "${FILTER_ARGS[@]}"
     EXIT_CODE=$?
     rm -f "$DENO_TEST_SCRIPT"
+    rm -f "$DENO_SCRIPT"
     if [ -n "$COVERAGE_FLAG" ]; then
       "$DENO_BIN" coverage cov_profile
     fi
     exit $EXIT_CODE
   else
-    "$DENO_BIN" test -A --no-check $COVERAGE_FLAG "${FILTER_ARGS[@]}" "$SCRIPT_DIR/webrun.test.ts"
+    "$DENO_BIN" run -A --no-check $COVERAGE_FLAG "$SCRIPT_DIR/webrun.deno.ts" --self-test "$SCRIPT_DIR/webrun.test.ts" "${FILTER_ARGS[@]}"
     EXIT_CODE=$?
     if [ -n "$COVERAGE_FLAG" ]; then
       "$DENO_BIN" coverage cov_profile
@@ -168,7 +175,7 @@ if grep -q "^__DATA__" "$SOURCE"; then
   DENO_SCRIPT="$DENO_SCRIPT.ts"
   awk '/^__DATA__/ {flag=1; next} /^__TEST_DATA__/ {flag=0} flag {print}' "$SOURCE" > "$DENO_SCRIPT"
   
-  "$DENO_BIN" run -A --no-check --quiet "$DENO_SCRIPT" "$@"
+  WEBRUN_BIN="$WEBRUN_BIN" "$DENO_BIN" run -A --no-check "$DENO_SCRIPT" "$@"
   EXIT_CODE=$?
   rm -f "$DENO_SCRIPT"
   exit $EXIT_CODE

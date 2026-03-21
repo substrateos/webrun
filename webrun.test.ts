@@ -32,7 +32,15 @@ export interface TestCase {
     expectStderr?: string;
 }
 
-export const tests: TestCase[] = [
+export async function testSandboxIsolation(tc: any) {
+    const Deno = tc.Deno;
+    const WORKER_BIN = tc.WORKER_BIN;
+    const join = (await import("https://deno.land/std@0.224.0/path/mod.ts")).join;
+    const dirname = (await import("https://deno.land/std@0.224.0/path/mod.ts")).dirname;
+    const assertEquals = (await import("https://deno.land/std@0.224.0/assert/mod.ts")).assertEquals;
+    const assertStringIncludes = (await import("https://deno.land/std@0.224.0/assert/mod.ts")).assertStringIncludes;
+
+    const tests: TestCase[] = [
     {
         name: "[File System] Blocks read outside enclave (/etc/passwd)",
         args: ["src/test.js"],
@@ -1033,9 +1041,9 @@ export const tests: TestCase[] = [
     {
         name: "[Security] Aborts if policy allows writing to the webrun executable directory",
         args: ["src/test.js"],
-        preflight: async (runDir: string) => {
+        preflight: async (runDir: string, tc: any) => {
             const join = (await import("https://deno.land/std@0.224.0/path/mod.ts")).join;
-            const workerBin = Deno.env.get("WEBRUN_BIN") || join(Deno.cwd(), "webrun");
+            const workerBin = tc.WORKER_BIN;
             const binDir = workerBin.substring(0, workerBin.lastIndexOf("/")) || "/";
             const cfg = { permissions: { storage: { [binDir]: { access: "write" } } } };
             Deno.writeTextFileSync(join(runDir, "webrun.json"), JSON.stringify(cfg));
@@ -1193,21 +1201,10 @@ export const tests: TestCase[] = [
         expectStdout: "RUNNING SUITE A",
         expectStderr: ""
     }
-];
+    ];
 
-import { assertEquals, assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { resolve, join, dirname } from "https://deno.land/std@0.224.0/path/mod.ts";
-
-
-const WORKER_BIN = Deno.env.get("WEBRUN_BIN") || resolve(Deno.cwd(), "webrun");
-
-// ==========================================
-// TEST EXECUTOR
-// ==========================================
-for (const t of tests) {
-    Deno.test({
-        name: t.name,
-        async fn() {
+    for (const t of tests) {
+        await tc.run(t.name, async () => {
             const runDir = Deno.realPathSync(Deno.makeTempDirSync({ prefix: "sandbox_tb_" }));
 
             const tree: Record<string, string> = { ...(t.files || {}) };
@@ -1235,7 +1232,7 @@ for (const t of tests) {
             Deno.mkdirSync(join(runDir, "src"), { recursive: true });
 
             if (t.preflight) {
-                await t.preflight(runDir);
+                await t.preflight(runDir, tc);
             }
             const testCwd = t.cwd ? join(runDir, t.cwd) : runDir;
             const cmd = new Deno.Command(WORKER_BIN, {
@@ -1277,17 +1274,23 @@ for (const t of tests) {
             if (t.expectStderr) {
                 assertStringIncludes(combinedOutput, t.expectStderr);
             }
-        }
-    });
+        });
+    }
 }
 
-Deno.test({
-    name: "[CLI] Bundling and Unbundling maintains structural integrity",
-    ignore: Deno.env.get("CW_IS_REPACKED_TEST") === "1",
-    async fn() {
+export async function testBundlingStructuralIntegrity(tc: any) {
+    const Deno = tc.Deno;
+    const WORKER_BIN = tc.WORKER_BIN;
+    const join = (await import("https://deno.land/std@0.224.0/path/mod.ts")).join;
+    const dirname = (await import("https://deno.land/std@0.224.0/path/mod.ts")).dirname;
+    const assertEquals = (await import("https://deno.land/std@0.224.0/assert/mod.ts")).assertEquals;
+
+    if (tc.IS_REPACKED_TEST) return;
+
+    await tc.run("[CLI] Bundling and Unbundling maintains structural integrity", async () => {
         const runDir = Deno.realPathSync(Deno.makeTempDirSync({ prefix: "sandbox_tb_" }));
 
-        const isBundled = Deno.readTextFileSync(WORKER_BIN).includes("\n__DATA__\n");
+    const isBundled = Deno.readTextFileSync(WORKER_BIN).includes("\n__DATA__\n");
         let bundledExecutable = WORKER_BIN;
 
         if (!isBundled) {
@@ -1323,8 +1326,8 @@ Deno.test({
         const evalCmd = new Deno.Command(join(runDir, "webrun-repacked"), {
             args: ["--self-test"],
             env: {
-                "CW_IS_REPACKED_TEST": "1",
-                "DENO_INSTALL_DIR": dirname(Deno.execPath())
+                "WEBRUN_IS_REPACKED_TEST": "1",
+                "WEBRUN_DENO_DIR": dirname(Deno.execPath())
             }
         });
         const evalOutput = await evalCmd.output();
@@ -1335,5 +1338,5 @@ Deno.test({
         assertEquals(evalOutput.code, 0);
 
         try { Deno.removeSync(runDir, { recursive: true }); } catch (_) { }
-    }
-});
+    });
+}

@@ -15,6 +15,7 @@ export interface WebrunConfig {
 
 export interface CommandInvocation {
     action: "run" | "test";
+    isSelfTest?: boolean;
     targetScriptPath: string | string[];
     sandboxArgs: string[];
     injectedArgsObj: Record<string, any>;
@@ -23,6 +24,9 @@ export interface CommandInvocation {
 
 export interface SandboxContextPayload {
     action: "run" | "test";
+    isSelfTest?: boolean;
+    webrunBin?: string;
+    isRepackedTest?: boolean;
     storageRoot: string;
     fallbackToTemp: boolean;
     injectedArgsObj: Record<string, any>;
@@ -41,16 +45,7 @@ export interface SandboxContextPayload {
 export function parseCommandInvocation(args: string[], config: WebrunConfig): CommandInvocation {
     const rawArgs = [...args];
     let isTest = false;
-    const testIdx = rawArgs.indexOf("--test");
-    if (testIdx !== -1) {
-        isTest = true;
-        rawArgs.splice(testIdx, 1);
-    }
-
-    if (rawArgs.length === 0) {
-        console.error("Usage: webrun [options] <script.ts> [args...]\nRun with --help for documentation.");
-        Deno.exit(1);
-    }
+    let isSelfTest = false;
 
     let targetScriptPath: string | string[];
     const injectedArgsObj: Record<string, any> = { "--": [] };
@@ -58,11 +53,41 @@ export function parseCommandInvocation(args: string[], config: WebrunConfig): Co
     const testPaths: string[] = [];
     let scriptFound = false;
 
+    const selfTestIdx = rawArgs.indexOf("--self-test");
+    if (selfTestIdx !== -1) {
+        isTest = true;
+        isSelfTest = true;
+        const testPayload = rawArgs[selfTestIdx + 1];
+        if (testPayload && !testPayload.startsWith("-")) {
+            testPaths.push(testPayload);
+            rawArgs.splice(selfTestIdx, 2);
+        } else {
+            rawArgs.splice(selfTestIdx, 1);
+        }
+    }
+
+    const testIdx = rawArgs.indexOf("--test");
+    if (testIdx !== -1) {
+        isTest = true;
+        rawArgs.splice(testIdx, 1);
+    }
+
+    if (rawArgs.length === 0 && !isTest) {
+        console.error("Usage: webrun [options] <script.ts> [args...]\nRun with --help for documentation.");
+        Deno.exit(1);
+    }
+
     for (let i = 0; i < rawArgs.length; i++) {
         const arg = rawArgs[i];
         if (onlyPositional) {
-            if (isTest) testPaths.push(arg);
-            else injectedArgsObj["--"].push(arg);
+            if (isTest && !isSelfTest) {
+                testPaths.push(arg);
+            } else if (isSelfTest) {
+                console.error("SECURITY FATAL: The --self-test execution mode strictly forbids external file paths.");
+                Deno.exit(1);
+            } else {
+                injectedArgsObj["--"].push(arg);
+            }
             continue;
         }
         if (arg === "--") {
@@ -94,9 +119,12 @@ export function parseCommandInvocation(args: string[], config: WebrunConfig): Co
                 } else {
                     injectedArgsObj["--"].push(arg);
                 }
-            } else {
+            } else if (isTest && !isSelfTest) {
                 testPaths.push(arg);
                 scriptFound = true;
+            } else if (isSelfTest) {
+                console.error("SECURITY FATAL: The --self-test execution mode strictly forbids external file paths.");
+                Deno.exit(1);
             }
         }
     }
@@ -126,6 +154,7 @@ export function parseCommandInvocation(args: string[], config: WebrunConfig): Co
 
     return {
         action: isTest ? "test" : "run",
+        isSelfTest,
         targetScriptPath: targetScriptPath!,
         sandboxArgs: rawArgs,
         injectedArgsObj,
@@ -198,7 +227,7 @@ export function generateSeatbeltProfile(cwd: string, readEnclaves: string, write
 (allow file-read* (literal "${cwd}"))
 
 (allow process-exec
-    (literal (param "DENO_BIN_PATH"))
+    (literal (param "WEBRUN_DENO_BIN_PATH"))
 )
 
 (allow file-read*
@@ -219,7 +248,7 @@ export function generateSeatbeltProfile(cwd: string, readEnclaves: string, write
 )
 
 (allow file-read* file-map-executable
-    (subpath (param "DENO_BIN_DIR"))
+    (subpath (param "WEBRUN_DENO_BIN_DIR"))
 )
 
 (allow system-socket)
@@ -234,15 +263,15 @@ export function generateSeatbeltProfile(cwd: string, readEnclaves: string, write
 )
 
 (allow file-read* file-write*
-    (subpath (param "SANDBOX_CACHE"))
-    (subpath (param "ISOLATED_TMP"))${writeEnclaves}
+    (subpath (param "WEBRUN_SANDBOX_CACHE"))
+    (subpath (param "WEBRUN_ISOLATED_TMP"))${writeEnclaves}
 )
 
 (allow file-read*
-    (literal (param "DENO_JSON"))
-    (literal (param "DENO_JSONC"))
-    (literal (param "DENO_LOCK"))
-    (literal (param "SCRIPT_PATH"))${readEnclaves}
+    (literal (param "WEBRUN_DENO_JSON"))
+    (literal (param "WEBRUN_DENO_JSONC"))
+    (literal (param "WEBRUN_DENO_LOCK"))
+    (literal (param "WEBRUN_SCRIPT_PATH"))${readEnclaves}
 )
 
 (deny file-read* file-write*
@@ -744,6 +773,7 @@ export async function executeInsideSandbox(payload: SandboxContextPayload) {
         }, 500);
     }
 
+    const preservedDeno = (globalThis as any).Deno;
     delete (globalThis as any).Deno;
 
     try {
@@ -805,6 +835,11 @@ export async function executeInsideSandbox(payload: SandboxContextPayload) {
                                         sanitizeExit: false,
                                         async fn(stepCtx: any) {
                                             const guestT = createGuestTestContext(stepCtx);
+                                            if (payload.isSelfTest) {
+                                                (guestT as any).Deno = preservedDeno;
+                                                (guestT as any).WORKER_BIN = payload.webrunBin;
+                                                (guestT as any).IS_REPACKED_TEST = payload.isRepackedTest;
+                                            }
                                             try {
                                                 contextPayload.command = scriptPath;
                                                 await fn(guestT, contextPayload);
@@ -895,9 +930,15 @@ export async function spawnSandboxProcess(cwd: string, args: string[]) {
     try { protectedFiles.push(Deno.realPathSync(new URL(import.meta.url).pathname)); } catch (_) { }
 
     for (const allowed of policy.denoWriteAllow) {
-        for (const protectedFile of protectedFiles) {
-            if (protectedFile === allowed || protectedFile.startsWith(allowed + "/")) {
-                console.error(`SECURITY FATAL: webrun executable (${protectedFile}) is within a permitted write directory (${allowed}). Refusing to run.`);
+        let canonicalAllowed = allowed;
+        try { canonicalAllowed = Deno.realPathSync(allowed); } catch (_) { }
+
+        for (const rawProtectedFile of protectedFiles) {
+            let protectedFile = rawProtectedFile;
+            try { protectedFile = Deno.realPathSync(rawProtectedFile); } catch (_) { }
+
+            if (protectedFile === canonicalAllowed || protectedFile.startsWith(canonicalAllowed + "/")) {
+                console.error(`SECURITY FATAL: webrun executable (${protectedFile}) is within a permitted write directory (${canonicalAllowed}). Refusing to run.`);
                 Deno.exit(1);
             }
         }
@@ -929,6 +970,9 @@ export async function spawnSandboxProcess(cwd: string, args: string[]) {
 
     const payloadObject: SandboxContextPayload = {
         action: invocation.action,
+        isSelfTest: invocation.isSelfTest,
+        webrunBin: Deno.env.get("WEBRUN_BIN") || resolve(projectRoot, "webrun"),
+        isRepackedTest: Deno.env.get("WEBRUN_IS_REPACKED_TEST") === "1",
         storageRoot: policy.storageRoot,
         fallbackToTemp: policy.fallbackToTemp,
         injectedArgsObj: invocation.injectedArgsObj,
@@ -949,39 +993,54 @@ await executeInsideSandbox(payload);
 
     const innerDenoArgs = [
         invocation.action,
-        ...invocation.networkFlags,
+        ...(invocation.isSelfTest ? [] : invocation.networkFlags),
         ...lockFlag,
         `--v8-flags=--max-old-space-size=${MAX_V8_MEM_MB}`,
         `--import-map=${importMapPath}`,
         "--no-prompt",
         "--no-npm",
-        "--no-check",
-        `--allow-read=${policy.denoReadAllow.join(",")},${runnerTmp},${opfsTmp}`,
-        `--allow-write=${policy.denoWriteAllow.join(",")},${opfsTmp}`,
-        `--allow-env=TMP_DIR`,
-        bootstrapPath
+        "--no-check"
     ];
 
-    const isMac = Deno.build.os === "darwin";
+    if (invocation.isSelfTest) {
+        innerDenoArgs.push("-A");
+    } else {
+        innerDenoArgs.push(
+            `--allow-read=${policy.denoReadAllow.join(",")},${runnerTmp},${opfsTmp}`,
+            `--allow-write=${policy.denoWriteAllow.join(",")},${opfsTmp}`,
+            `--allow-env=TMP_DIR`
+        );
+    }
+    innerDenoArgs.push(bootstrapPath);
+
+    const isMac = Deno.build.os === "darwin" && !invocation.isSelfTest;
     const baseCmd = isMac ? "sandbox-exec" : Deno.execPath();
 
     const execArgs = isMac ? [
         "-p", seatbeltProfile,
-        "-D", `SANDBOX_CACHE=${localDenoDir}`,
-        "-D", `ISOLATED_TMP=${isolatedTmp}`,
-        "-D", `DENO_JSON=${resolve(projectRoot, "deno.json")}`,
-        "-D", `DENO_JSONC=${resolve(projectRoot, "deno.jsonc")}`,
-        "-D", `DENO_LOCK=${lockFilePath}`,
-        "-D", `SCRIPT_PATH=${Deno.realPathSync(new URL(import.meta.url).pathname)}`,
-        "-D", `DENO_BIN_DIR=${dirname(Deno.execPath())}`,
-        "-D", `DENO_BIN_PATH=${Deno.execPath()}`,
+        "-D", `WEBRUN_SANDBOX_CACHE=${localDenoDir}`,
+        "-D", `WEBRUN_ISOLATED_TMP=${isolatedTmp}`,
+        "-D", `WEBRUN_DENO_JSON=${resolve(projectRoot, "deno.json")}`,
+        "-D", `WEBRUN_DENO_JSONC=${resolve(projectRoot, "deno.jsonc")}`,
+        "-D", `WEBRUN_DENO_LOCK=${lockFilePath}`,
+        "-D", `WEBRUN_SCRIPT_PATH=${Deno.realPathSync(new URL(import.meta.url).pathname)}`,
+        "-D", `WEBRUN_DENO_BIN_DIR=${dirname(Deno.execPath())}`,
+        "-D", `WEBRUN_DENO_BIN_PATH=${Deno.execPath()}`,
         Deno.execPath(),
         ...innerDenoArgs
     ] : innerDenoArgs;
 
+    const envVars = { ...payloadObject.finalEnvVars };
+    if (invocation.isSelfTest) {
+        envVars["WEBRUN_BIN"] = payloadObject.webrunBin; 
+        envVars["WEBRUN_IS_REPACKED_TEST"] = payloadObject.isRepackedTest ? "1" : "0";
+        envVars["WEBRUN_DENO_DIR"] = dirname(Deno.execPath());
+    }
+
     const cmdOptions: Deno.CommandOptions = {
         args: execArgs,
         env: {
+            ...envVars,
             "HOME": isolatedTmp,
             "TMPDIR": isolatedTmp,
             "PATH": "/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin",
