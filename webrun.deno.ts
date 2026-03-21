@@ -70,7 +70,7 @@ export function parseCommandInvocation(args: string[], config: WebrunConfig): Co
     let isTest = false;
     let isSelfTest = false;
 
-    let targetScriptPath: string | string[];
+    let targetScriptPath: string | string[] = "";
     const injectedArgsObj: Record<string, any> = { "--": [] };
     let onlyPositional = false;
     const testPaths: string[] = [];
@@ -789,10 +789,9 @@ function createGuestTestContext(denoCtx: any): any {
 
 export async function executeInsideSandbox(payload: SandboxContextPayload) {
     const rawArgs = payload.injectedArgsObj;
-    const argsPayload: any = [...rawArgs["--"]];
+    const argsPayload: string[] = [...rawArgs["--"]];
     const flags = { ...rawArgs };
     delete flags["--"];
-    argsPayload.flags = flags;
 
     const storageManager = createStorageManager(payload.storageRoot, payload.fallbackToTemp);
     const opfsManager = createStorageManager(payload.opfsRoot, true);
@@ -825,10 +824,10 @@ export async function executeInsideSandbox(payload: SandboxContextPayload) {
     try {
         const contextPayload = {
             args: argsPayload,
-            flags: argsPayload.flags,
+            flags: flags,
             env: payload.finalEnvVars,
             command: Array.isArray(payload.targetScriptPath) ? payload.targetScriptPath[0] : payload.targetScriptPath,
-            argv: payload.sandboxArgs,
+            argv: [payload.webrunBin, ...(payload.sandboxArgs || [])],
             storage: storageManager
         };
 

@@ -72,13 +72,16 @@ Scripts running in `webrun` typically export a default function. The `ctx` objec
 ```javascript
 export default async function(ctx) {
   // 1. Arguments & Flags
-  // ctx.args contains positional command line arguments passed after your script.
+  // ctx.args contains safely parsed positional arguments specifically intended for your script.
   // ctx.flags contains any parsed --flag values.
-  // E.g., `webrun my_script.ts --mode debug my_file.txt`
+  // ctx.argv contains the entire raw execution array including the webrun executable.
+  // E.g., `/usr/local/bin/webrun my_script.ts --mode debug my_file.txt`
   //   ctx.args[0] === "my_file.txt"
-  //   ctx.flags.mode === "debug"
-  console.log("Positional Arguments:", ctx.args); 
+  //   ctx.flags.mode     === "debug"
+  //   ctx.argv[0] === "/usr/local/bin/webrun"
+  console.log("Positional Arguments:", ctx.args);
   console.log("Flags:", ctx.flags); 
+  console.log("Raw argv:", ctx.argv);
   
   // ctx.command is the name/path of the script itself
   console.log("Running script:", ctx.command);
