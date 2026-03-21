@@ -18,5 +18,11 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    - name: Run Test Suite
+    - name: Run Test Suite (Source)
       run: ./webrun --self-test
+
+    - name: Run Test Suite (Bundled)
+      run: |
+        ./webrun --self-bundle > webrun_bundled
+        chmod +x webrun_bundled
+        ./webrun_bundled --self-test

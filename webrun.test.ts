@@ -1368,8 +1368,9 @@ export async function testBundlingStructuralIntegrity(tc: any) {
         Deno.writeFileSync(join(runDir, "webrun-repacked"), bundleOutput.stdout);
         Deno.chmodSync(join(runDir, "webrun-repacked"), 0o755);
 
-        const evalCmd = new Deno.Command(join(runDir, "webrun-repacked"), {
+        const evalCmd = new Deno.Command("./webrun-repacked", {
             args: ["--self-test"],
+            cwd: runDir,
             env: {
                 "WEBRUN_IS_REPACKED_TEST": "1",
                 "WEBRUN_DENO_DIR": dirname(Deno.execPath())
