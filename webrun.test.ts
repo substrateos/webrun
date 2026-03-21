@@ -29,7 +29,7 @@ export interface TestCase {
     /** Expected sandbox boundary assertions */
     expectCode: number | "nonzero";
     expectStdout?: string;
-    expectStderr?: string;
+    expectStderr?: string | string[];
 }
 
 export async function testSandboxIsolation(tc: any) {
@@ -857,7 +857,11 @@ export async function testSandboxIsolation(tc: any) {
         },
         cwd: "child",
         expectCode: 1,
-        expectStderr: "escalate 'env' permissions"
+        expectStderr: [
+            "[Security Fatal] Privilege escalation detected in nested configuration.",
+            "  Reason    : Escalating 'env' permissions",
+            "  Attempted : B"
+        ]
     },
     {
         name: "[Security] Blocks network permission escalation",
@@ -871,7 +875,11 @@ export async function testSandboxIsolation(tc: any) {
         },
         cwd: "child",
         expectCode: 1,
-        expectStderr: "escalate 'network' permissions"
+        expectStderr: [
+            "[Security Fatal] Privilege escalation detected in nested configuration.",
+            "  Reason    : Escalating 'network' permissions",
+            "  Attempted : b.com"
+        ]
     },
     {
         name: "[Security] Blocks storage path escalation",
@@ -885,7 +893,10 @@ export async function testSandboxIsolation(tc: any) {
         },
         cwd: "child",
         expectCode: 1,
-        expectStderr: "escalate 'storage' permissions"
+        expectStderr: [
+            "[Security Fatal] Privilege escalation detected in nested configuration.",
+            "  Reason    : Escalating 'storage' permissions"
+        ]
     },
     {
         name: "[Security] Blocks storage write escalation over read parent",
@@ -899,7 +910,10 @@ export async function testSandboxIsolation(tc: any) {
         },
         cwd: "child",
         expectCode: 1,
-        expectStderr: "escalate 'storage' permissions"
+        expectStderr: [
+            "[Security Fatal] Privilege escalation detected in nested configuration.",
+            "  Reason    : Escalating 'storage' permissions"
+        ]
     },
     {
         name: "[Security] Blocks timeoutMillis limit escalation",
@@ -913,7 +927,12 @@ export async function testSandboxIsolation(tc: any) {
         },
         cwd: "child",
         expectCode: 1,
-        expectStderr: "escalate 'timeoutMillis' limit"
+        expectStderr: [
+            "[Security Fatal] Privilege escalation detected in nested configuration.",
+            "  Reason    : Escalating 'timeoutMillis' limit",
+            "  Attempted : 1000",
+            "  Permitted : 500"
+        ]
     },
     {
         name: "[Security] Blocks memoryMB limit escalation",
@@ -927,7 +946,12 @@ export async function testSandboxIsolation(tc: any) {
         },
         cwd: "child",
         expectCode: 1,
-        expectStderr: "escalate 'memoryMB' limit"
+        expectStderr: [
+            "[Security Fatal] Privilege escalation detected in nested configuration.",
+            "  Reason    : Escalating 'memoryMB' limit",
+            "  Attempted : 256",
+            "  Permitted : 128"
+        ]
     },
     {
         name: "[Security] Permits valid narrowing of parent timeoutMillis limit",
@@ -972,7 +996,10 @@ export async function testSandboxIsolation(tc: any) {
         `
         },
         expectCode: 137,
-        expectStderr: "FATAL OOM"
+        expectStderr: [
+            "[Fatal] Memory limit exceeded!",
+            "  Current:"
+        ]
     },
     {
         name: "[Security] Permits valid narrowing of parent configuration and strictly enforces it",
@@ -1056,7 +1083,10 @@ export async function testSandboxIsolation(tc: any) {
         `
         },
         expectCode: 1,
-        expectStderr: "SECURITY FATAL: webrun executable"
+        expectStderr: [
+            "[Security Fatal] The webrun file is within a permitted write directory. Refusing to run.",
+            "  Executable:"
+        ]
     },
     {
         name: "[Security] Aborts if policy allows writing to the top-level webrun.json directory",
@@ -1070,7 +1100,10 @@ export async function testSandboxIsolation(tc: any) {
         `
         },
         expectCode: 1,
-        expectStderr: "SECURITY FATAL: webrun executable"
+        expectStderr: [
+            "[Security Fatal] The webrun file is within a permitted write directory. Refusing to run.",
+            "  Executable:"
+        ]
     },
     {
         name: "[Security] Aborts if policy allows writing to a child webrun.json directory",
@@ -1084,7 +1117,10 @@ export async function testSandboxIsolation(tc: any) {
         },
         cwd: "child",
         expectCode: 1,
-        expectStderr: "SECURITY FATAL: webrun executable"
+        expectStderr: [
+            "[Security Fatal] The webrun file is within a permitted write directory. Refusing to run.",
+            "  Executable:"
+        ]
     },
     {
         name: "[CLI] Prints help screen when --help is passed",
@@ -1114,7 +1150,10 @@ export async function testSandboxIsolation(tc: any) {
             "src/test.js": async () => { }
         },
         expectCode: 1,
-        expectStderr: "is within a permitted write directory"
+        expectStderr: [
+            "[Security Fatal] The webrun file is within a permitted write directory. Refusing to run.",
+            "  Executable:"
+        ]
     },
     {
         name: "[Import Map] Merges parent and child import maps with child precedence",
@@ -1269,10 +1308,16 @@ export async function testSandboxIsolation(tc: any) {
             const combinedOutput = stdout + "\n" + stderr;
 
             if (t.expectStdout) {
-                assertStringIncludes(combinedOutput, t.expectStdout);
+                const exps = Array.isArray(t.expectStdout) ? t.expectStdout : [t.expectStdout];
+                for (const exp of exps) {
+                    assertStringIncludes(combinedOutput, exp);
+                }
             }
             if (t.expectStderr) {
-                assertStringIncludes(combinedOutput, t.expectStderr);
+                const exps = Array.isArray(t.expectStderr) ? t.expectStderr : [t.expectStderr];
+                for (const exp of exps) {
+                    assertStringIncludes(combinedOutput, exp);
+                }
             }
         });
     }

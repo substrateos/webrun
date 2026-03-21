@@ -1,5 +1,28 @@
 import { resolve, dirname } from "https://deno.land/std@0.224.0/path/mod.ts";
 
+export function printUsageError(msg: string) {
+    console.error(`[Usage] ${msg}`);
+}
+export function printWarning(msg: string) {
+    console.error(`[Warning] ${msg}`);
+}
+export function printExecutionError(msg: string, detail?: string) {
+    console.error(`[Execution Error] ${msg}`);
+    if (detail) console.error(`  ${detail}`);
+}
+export function printFatalError(msg: string, detail?: string) {
+    console.error(`[Fatal] ${msg}`);
+    if (detail) console.error(`  ${detail}`);
+}
+export function printSecurityFatal(msg: string, details?: Record<string, string>) {
+    console.error(`[Security Fatal] ${msg}`);
+    if (details) {
+        for (const [k, v] of Object.entries(details)) {
+            console.error(`  ${k.padEnd(10)}: ${v}`);
+        }
+    }
+}
+
 // =========================================================
 // 1. TYPES & DOMAIN MODELS
 // =========================================================
@@ -73,7 +96,7 @@ export function parseCommandInvocation(args: string[], config: WebrunConfig): Co
     }
 
     if (rawArgs.length === 0 && !isTest) {
-        console.error("Usage: webrun [options] <script.ts> [args...]\nRun with --help for documentation.");
+        printUsageError("Usage: webrun [options] <script.ts> [args...]\nRun with --help for documentation.");
         Deno.exit(1);
     }
 
@@ -83,7 +106,7 @@ export function parseCommandInvocation(args: string[], config: WebrunConfig): Co
             if (isTest && !isSelfTest) {
                 testPaths.push(arg);
             } else if (isSelfTest) {
-                console.error("SECURITY FATAL: The --self-test execution mode strictly forbids external file paths.");
+                printSecurityFatal("The --self-test execution mode strictly forbids external file paths.");
                 Deno.exit(1);
             } else {
                 injectedArgsObj["--"].push(arg);
@@ -106,10 +129,6 @@ export function parseCommandInvocation(args: string[], config: WebrunConfig): Co
             } else {
                 val = true;
             }
-            if (key.startsWith("env.")) {
-                console.error("FATAL: Flag '--" + key + "' collides with reserved internal namespaces.");
-                Deno.exit(1);
-            }
             injectedArgsObj[key] = val;
         } else {
             if (!isTest) {
@@ -123,7 +142,7 @@ export function parseCommandInvocation(args: string[], config: WebrunConfig): Co
                 testPaths.push(arg);
                 scriptFound = true;
             } else if (isSelfTest) {
-                console.error("SECURITY FATAL: The --self-test execution mode strictly forbids external file paths.");
+                printSecurityFatal("The --self-test execution mode strictly forbids external file paths.");
                 Deno.exit(1);
             }
         }
@@ -131,13 +150,13 @@ export function parseCommandInvocation(args: string[], config: WebrunConfig): Co
 
     if (isTest) {
         if (testPaths.length === 0) {
-            console.error("Usage: webrun --test [options] <script1.ts> ... [args...]\nRun with --help for documentation.");
+            printUsageError("Usage: webrun --test [options] <script1.ts> ... [args...]\nRun with --help for documentation.");
             Deno.exit(1);
         }
         targetScriptPath = testPaths;
     } else {
         if (!scriptFound) {
-            console.error("Usage: webrun [options] <script.ts> [args...]\nRun with --help for documentation.");
+            printUsageError("Usage: webrun [options] <script.ts> [args...]\nRun with --help for documentation.");
             Deno.exit(1);
         }
     }
@@ -331,7 +350,7 @@ export function buildNodeSinkholeDependencies(isolatedTmp: string, importMapPath
                 }
             }
         } catch (e: any) {
-            console.error(`Warning: Failed to parse or merge importMap at ${absMapPath}: ${e.message}`);
+            printWarning(`Failed to parse or merge importMap at ${absMapPath}: ${e.message}`);
         }
     }
 
@@ -644,11 +663,23 @@ export function resolveLocalConfiguration(currentDir: string): { config: WebrunC
             // Check limits
             if (parentConfig.limits) {
                 if (parentConfig.limits.timeoutMillis !== undefined && childConfig.limits?.timeoutMillis !== undefined && childConfig.limits.timeoutMillis > parentConfig.limits.timeoutMillis) {
-                    console.error(`SECURITY FATAL: Child webrun configuration (${childConfigDir}) attempts to escalate 'timeoutMillis' limit (${childConfig.limits.timeoutMillis}) beyond parent (${parentConfigDir}) limit (${parentConfig.limits.timeoutMillis}).`);
+                    printSecurityFatal("Privilege escalation detected in nested configuration.", {
+                        Reason: "Escalating 'timeoutMillis' limit",
+                        Attempted: String(childConfig.limits.timeoutMillis),
+                        Permitted: String(parentConfig.limits.timeoutMillis),
+                        Child: childConfigDir,
+                        Parent: parentConfigDir
+                    });
                     Deno.exit(1);
                 }
                 if (parentConfig.limits.memoryMB !== undefined && childConfig.limits?.memoryMB !== undefined && childConfig.limits.memoryMB > parentConfig.limits.memoryMB) {
-                    console.error(`SECURITY FATAL: Child webrun configuration (${childConfigDir}) attempts to escalate 'memoryMB' limit (${childConfig.limits.memoryMB}) beyond parent (${parentConfigDir}) limit (${parentConfig.limits.memoryMB}).`);
+                    printSecurityFatal("Privilege escalation detected in nested configuration.", {
+                        Reason: "Escalating 'memoryMB' limit",
+                        Attempted: String(childConfig.limits.memoryMB),
+                        Permitted: String(parentConfig.limits.memoryMB),
+                        Child: childConfigDir,
+                        Parent: parentConfigDir
+                    });
                     Deno.exit(1);
                 }
             }
@@ -656,7 +687,12 @@ export function resolveLocalConfiguration(currentDir: string): { config: WebrunC
             // Check env
             for (const e of childConfig.permissions!.env!) {
                 if (!parentConfig.permissions!.env!.includes(e)) {
-                    console.error(`SECURITY FATAL: Child webrun configuration (${childConfigDir}) attempts to escalate 'env' permissions for '${e}' not granted by parent (${parentConfigDir}).`);
+                    printSecurityFatal("Privilege escalation detected in nested configuration.", {
+                        Reason: "Escalating 'env' permissions",
+                        Attempted: e,
+                        Child: childConfigDir,
+                        Parent: parentConfigDir
+                    });
                     Deno.exit(1);
                 }
             }
@@ -664,7 +700,12 @@ export function resolveLocalConfiguration(currentDir: string): { config: WebrunC
             // Check network
             for (const n of childConfig.permissions!.network!) {
                 if (!parentConfig.permissions!.network!.includes(n)) {
-                    console.error(`SECURITY FATAL: Child webrun configuration (${childConfigDir}) attempts to escalate 'network' permissions for '${n}' not granted by parent (${parentConfigDir}).`);
+                    printSecurityFatal("Privilege escalation detected in nested configuration.", {
+                        Reason: "Escalating 'network' permissions",
+                        Attempted: n,
+                        Child: childConfigDir,
+                        Parent: parentConfigDir
+                    });
                     Deno.exit(1);
                 }
             }
@@ -685,7 +726,12 @@ export function resolveLocalConfiguration(currentDir: string): { config: WebrunC
                     }
                 }
                 if (!covered) {
-                    console.error(`SECURITY FATAL: Child webrun configuration (${childConfigDir}) attempts to escalate 'storage' permissions for '${c.path}' not granted by parent (${parentConfigDir}).`);
+                    printSecurityFatal("Privilege escalation detected in nested configuration.", {
+                        Reason: "Escalating 'storage' permissions",
+                        Attempted: c.path,
+                        Child: childConfigDir,
+                        Parent: parentConfigDir
+                    });
                     Deno.exit(1);
                 }
             }
@@ -767,7 +813,7 @@ export async function executeInsideSandbox(payload: SandboxContextPayload) {
             const usage = getMemoryUsage();
             if (usage.rss > MAX_RSS_BYTES) {
                 const currentMB = (usage.rss / 1024 / 1024).toFixed(2);
-                console.error(`FATAL OOM: Memory exceeded! (Current: ${currentMB}MB / Max: ${MAX_RSS_MB}MB)`);
+                printFatalError("Memory limit exceeded!", `Current: ${currentMB}MB / Allowed: ${MAX_RSS_MB}MB`);
                 exitFn(137);
             }
         }, 500);
@@ -868,7 +914,7 @@ export async function executeInsideSandbox(payload: SandboxContextPayload) {
             exitFn(0);
         }
     } catch (err: any) {
-        console.error("[Sandbox Error]", err.message);
+        printExecutionError(err.message);
         // Allow IPC pipe to flush stderr cleanly before exiting
         await new Promise(r => setTimeout(r, 10));
         exitFn(1);
@@ -916,7 +962,7 @@ export async function spawnSandboxProcess(cwd: string, args: string[]) {
                 console.log(contractMatch[1].trim());
             }
         } catch (_) {
-            console.error("Webrun: Documentation unavailable.");
+            printWarning("Documentation unavailable.");
         }
         Deno.exit(0);
     }
@@ -938,14 +984,19 @@ export async function spawnSandboxProcess(cwd: string, args: string[]) {
             try { protectedFile = Deno.realPathSync(rawProtectedFile); } catch (_) { }
 
             if (protectedFile === canonicalAllowed || protectedFile.startsWith(canonicalAllowed + "/")) {
-                console.error(`SECURITY FATAL: webrun executable (${protectedFile}) is within a permitted write directory (${canonicalAllowed}). Refusing to run.`);
+                printSecurityFatal("The webrun file is within a permitted write directory. Refusing to run.", {
+                    Executable: protectedFile,
+                    Permitted: canonicalAllowed
+                });
                 Deno.exit(1);
             }
         }
     }
 
     if (!policy.isPwdAllowed && !policy.fallbackToTemp) {
-        console.error(`SECURITY FATAL: PWD (${cwd}) is not permitted by webrun.json fs allowlist rules.`);
+        printSecurityFatal("The working directory is not granted read access in webrun.json storage permissions.", {
+            Directory: cwd
+        });
         Deno.exit(1);
     }
 
@@ -1032,7 +1083,7 @@ await executeInsideSandbox(payload);
 
     const envVars = { ...payloadObject.finalEnvVars };
     if (invocation.isSelfTest) {
-        envVars["WEBRUN_BIN"] = payloadObject.webrunBin; 
+        envVars["WEBRUN_BIN"] = payloadObject.webrunBin;
         envVars["WEBRUN_IS_REPACKED_TEST"] = payloadObject.isRepackedTest ? "1" : "0";
         envVars["WEBRUN_DENO_DIR"] = dirname(Deno.execPath());
     }
@@ -1072,10 +1123,10 @@ await executeInsideSandbox(payload);
         try { Deno.removeSync(runnerTmp, { recursive: true }); } catch (_) { }
         try { Deno.removeSync(opfsTmp, { recursive: true }); } catch (_) { }
         if (e.name === "AbortError") {
-            console.error(`\n[Sandbox] Execution timed out after ${config.limits?.timeoutMillis}ms`);
+            printExecutionError(`Timeout limit reached after ${config.limits?.timeoutMillis}ms`);
             Deno.exit(143);
         }
-        console.error("[Sandbox] Failed to spawn:", e);
+        printExecutionError("Failed to spawn", e.message || String(e));
         Deno.exit(1);
     }
 }
