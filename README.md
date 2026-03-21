@@ -91,13 +91,12 @@ export default async function(ctx) {
   console.log("API Key:", ctx.env.API_KEY);
 
   // 3. File System
-  // ctx.storage is a standard W3C StorageManager natively mapping the host file system.
+  // ctx.dir is a standard W3C FileSystemDirectoryHandle natively mapping the host file system.
   // It gives you access to specific paths explicitly defined in webrun.json (or package.json),
   // evaluated relative to the folder where the configuration file was found.
-  const root = await ctx.storage.getDirectory();
   
   // Create and write to a file:
-  const fileHandle = await root.getFileHandle("output.txt", { create: true });
+  const fileHandle = await ctx.dir.getFileHandle("output.txt", { create: true });
   const writable = await fileHandle.createWritable();
   await writable.write("Hello sandbox!");
   await writable.close();
@@ -111,14 +110,14 @@ export default async function(ctx) {
 ```
 
 ### File System Access
-Scripts cannot use standard `fs` or `Deno` globals to interact with the file system. You must use `ctx.storage` (to access the host directory mapped by the configuration) or `navigator.storage` (for temporary sandbox-isolated OPFS storage). If you try to read or write a file outside of the allowed directory, the sandbox will block the operation.
+Scripts cannot use standard `fs` or `Deno` globals to interact with the file system. You must use `ctx.dir` (to access the host directory mapped by the configuration) or `navigator.storage` (for temporary sandbox-isolated OPFS storage). If you try to read or write a file outside of the allowed directory, the sandbox will block the operation.
 
 ### Testing Scripts
 If you run `webrun --test my_script.ts`, `webrun` will look for named exports that begin with `test` and execute them using the native test runner. You can also pass multiple test files at once, such as `webrun --test a.test.ts b.test.ts`, and all discovered test exports will be executed in a combined suite.
 
 ```javascript
 export async function testMyFunction(t, ctx) {
-  // `ctx` is the standard sandbox context (args, flags, env, storage)
+  // `ctx` is the standard sandbox context (args, flags, env, dir)
   // `t` is a sandbox-safe test adapter providing the following API:
   
   t.log("Starting test for:", t.name);

@@ -66,7 +66,7 @@ export async function testSandboxIsolation(tc: any) {
             "src/test.js": async (ctx: any) => {
                 const { args, env } = ctx;
                 try {
-                    const root = await ctx.storage.getDirectory();
+                    const root = ctx.dir;
                     // Attempt to break out of StorageManager bounds
                     await root.getFileHandle("../../../../../../tmp/sandbox_escape.txt", { create: true });
                 }
@@ -85,8 +85,8 @@ export async function testSandboxIsolation(tc: any) {
         scripts: {
             "data/test.js": async (ctx: any) => {
                 const { args, env } = ctx;
-                const root = await ctx.storage.getDirectory();
-                if (await ctx.storage.persisted() !== true) throw new Error("Expected PWD to be persisted");
+                const root = ctx.dir;
+                if (ctx.persisted !== true) throw new Error("Expected PWD to be persisted");
                 const fileHandle = await root.getFileHandle("test_write.txt", { create: true });
                 const writable = await fileHandle.createWritable();
                 const writer = writable.getWriter();
@@ -173,7 +173,7 @@ export async function testSandboxIsolation(tc: any) {
         scripts: {
             "src/test.js": async (ctx: any) => {
                 const { args, env } = ctx;
-                const root = await ctx.storage.getDirectory();
+                const root = ctx.dir;
                 try {
                     await root.getFileHandle("test.txt", { create: true });
                 } catch (e: any) { console.error("BLOCKED:", e.message); throw e; }
@@ -193,7 +193,7 @@ export async function testSandboxIsolation(tc: any) {
         scripts: {
             "my_custom_enclave/test_script.js": async (ctx: any) => {
                 const { args, env } = ctx;
-                const root = await ctx.storage.getDirectory();
+                const root = ctx.dir;
                 const fileHandle = await root.getFileHandle("test.txt", { create: true });
                 const writable = await fileHandle.createWritable();
                 const writer = writable.getWriter();
@@ -289,8 +289,8 @@ export async function testSandboxIsolation(tc: any) {
         scripts: {
             "src/test.js": async (ctx: any) => {
                 const { args, env } = ctx;
-                const root = await ctx.storage.getDirectory();
-                if (await ctx.storage.persisted() !== false) throw new Error("Expected temp dir to not be persisted");
+                const root = ctx.dir;
+                if (ctx.persisted !== false) throw new Error("Expected temp dir to not be persisted");
                 const fh = await root.getFileHandle("temp.txt", { create: true });
                 if (!fh) throw new Error("Could not create temp file");
                 const w = await fh.createWritable();
@@ -312,8 +312,8 @@ export async function testSandboxIsolation(tc: any) {
         scripts: {
             "src/test.js": async (ctx: any) => {
                 const { args, env } = ctx;
-                const root = await ctx.storage.getDirectory();
-                if (await ctx.storage.persisted() !== false) throw new Error("Expected temp dir to not be persisted");
+                const root = ctx.dir;
+                if (ctx.persisted !== false) throw new Error("Expected temp dir to not be persisted");
                 const fh = await root.getFileHandle("temp.txt", { create: true });
                 if (!fh) throw new Error("Could not create temp file");
                 const w = await fh.createWritable();
@@ -335,7 +335,7 @@ export async function testSandboxIsolation(tc: any) {
         scripts: {
             "testing_dir/test_pkg.js": async (ctx: any) => {
                 const { args, env } = ctx;
-                const root = await ctx.storage.getDirectory();
+                const root = ctx.dir;
                 const fh = await root.getFileHandle("test_write.txt", { create: true });
                 const w = await fh.createWritable();
                 await w.write("package_json_fallback_active");
@@ -386,7 +386,7 @@ export async function testSandboxIsolation(tc: any) {
         scripts: {
             "data/test.js": async (ctx: any) => {
                 const { args, env } = ctx;
-                const root = await ctx.storage.getDirectory();
+                const root = ctx.dir;
                 const fh = await root.getFileHandle("positional.txt", { create: true });
 
                 // 1. Write initial payload
@@ -428,7 +428,7 @@ export async function testSandboxIsolation(tc: any) {
         scripts: {
             "data/test.js": async (ctx: any) => {
                 const { args, env } = ctx;
-                const root = await ctx.storage.getDirectory();
+                const root = ctx.dir;
                 const fh = await root.getFileHandle("stream.txt", { create: true });
                 const w = await fh.createWritable();
                 await w.write("streaming_data_test");
@@ -458,7 +458,7 @@ export async function testSandboxIsolation(tc: any) {
         scripts: {
             "data/test.js": async (ctx: any) => {
                 const { args, env } = ctx;
-                const root = await ctx.storage.getDirectory();
+                const root = ctx.dir;
                 try {
                     await root.getFileHandle("../../etc/passwd");
                 } catch (e: any) {
@@ -483,7 +483,7 @@ export async function testSandboxIsolation(tc: any) {
         scripts: {
             "data/test.js": async (ctx: any) => {
                 const { args, env } = ctx;
-                const root = await ctx.storage.getDirectory();
+                const root = ctx.dir;
                 const subDir = await root.getDirectoryHandle("nested_dir", { create: true });
                 if (subDir.name !== "nested_dir" || subDir.kind !== "directory") throw new Error("Directory handle invalid");
 
@@ -512,7 +512,7 @@ export async function testSandboxIsolation(tc: any) {
         scripts: {
             "data/test.js": async (ctx: any) => {
                 const { args, env } = ctx;
-                const root = await ctx.storage.getDirectory();
+                const root = ctx.dir;
 
                 await root.getFileHandle("to_delete.txt", { create: true });
                 await root.removeEntry("to_delete.txt");
@@ -540,7 +540,7 @@ export async function testSandboxIsolation(tc: any) {
         cwd: "data",
         scripts: {
             "data/test.js": async (ctx: any) => {
-                const root = await ctx.storage.getDirectory();
+                const root = ctx.dir;
                 const fh = await root.getFileHandle("truncation_bug.txt", { create: true });
 
                 // 1. Write the initial base data
@@ -582,7 +582,7 @@ export async function testSandboxIsolation(tc: any) {
         },
         scripts: {
             "src/test.js": async (ctx: any) => {
-                const root = await ctx.storage.getDirectory();
+                const root = ctx.dir;
                 try {
                     // If it resolves outside the enclave safely it throws SecurityError
                     const fh = await root.getFileHandle("malicious_link");
@@ -609,7 +609,7 @@ export async function testSandboxIsolation(tc: any) {
         cwd: "data",
         scripts: {
             "data/test.js": async (ctx: any) => {
-                const root = await ctx.storage.getDirectory();
+                const root = ctx.dir;
                 await root.getFileHandle("file_a.txt", { create: true });
                 await root.getDirectoryHandle("dir_b", { create: true });
 
@@ -646,7 +646,7 @@ export async function testSandboxIsolation(tc: any) {
         cwd: "data",
         scripts: {
             "data/test.js": async (ctx: any) => {
-                const root = await ctx.storage.getDirectory();
+                const root = ctx.dir;
                 const subDir = await root.getDirectoryHandle("nested_dir", { create: true });
                 const fh1 = await subDir.getFileHandle("target.txt", { create: true });
                 const fh2 = await subDir.getFileHandle("target.txt", { create: false });
@@ -676,7 +676,7 @@ export async function testSandboxIsolation(tc: any) {
         cwd: "data",
         scripts: {
             "data/test.js": async (ctx: any) => {
-                const root = await ctx.storage.getDirectory();
+                const root = ctx.dir;
                 const fh = await root.getFileHandle("binary.bin", { create: true });
                 const w = await fh.createWritable();
                 await w.write(new Uint8Array([0x01, 0x02, 0x03]));
@@ -703,7 +703,7 @@ export async function testSandboxIsolation(tc: any) {
         cwd: "data",
         scripts: {
             "data/test.js": async (ctx: any) => {
-                const root = await ctx.storage.getDirectory();
+                const root = ctx.dir;
                 const populated = await root.getDirectoryHandle("populated", { create: true });
                 const fh = await populated.getFileHandle("deep.txt", { create: true });
                 const w = await fh.createWritable();
@@ -761,7 +761,7 @@ export async function testSandboxIsolation(tc: any) {
             export default async function(ctx) {
                 if (add(2, 3) !== 5) throw new Error("Math failed");
                 
-                const root = await ctx.storage.getDirectory();
+                const root = ctx.dir;
                 try {
                     await root.getFileHandle("shared_lib/math.ts");
                 } catch (e) {
@@ -1049,12 +1049,12 @@ export async function testSandboxIsolation(tc: any) {
         scripts: {
             "child/test.js": `
             export default async function(ctx) {
-                const { env, storage } = ctx;
+                const { env, dir } = ctx;
                 
                 if (env.B !== undefined) throw new Error("Env B leaked");
                 if (env.A !== "secret") throw new Error("Env A missing");
                 
-                const root = await storage.getDirectory();
+                const root = ctx.dir;
                 
                 // 1. Should fail to write to PWD (since narrowed to read-only)
                 let blocked = false;

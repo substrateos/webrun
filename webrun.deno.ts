@@ -828,7 +828,8 @@ export async function executeInsideSandbox(payload: SandboxContextPayload) {
             env: payload.finalEnvVars,
             command: Array.isArray(payload.targetScriptPath) ? payload.targetScriptPath[0] : payload.targetScriptPath,
             argv: [payload.webrunBin, ...(payload.sandboxArgs || [])],
-            storage: storageManager
+            dir: await storageManager.getDirectory(),
+            persisted: !payload.fallbackToTemp
         };
 
         if (payload.action === "test") {
