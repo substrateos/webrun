@@ -854,55 +854,32 @@ export async function executeInsideSandbox(payload: SandboxContextPayload) {
                 return;
             }
 
-            testFn({
-                name: "[webrun] test suite",
-                sanitizeOps: false,
-                sanitizeResources: false,
-                sanitizeExit: false,
-                async fn(t: any) {
-                    const grouped: Record<string, { name: string, fn: Function }[]> = {};
-                    for (const { name, fn, scriptPath } of allTestExports) {
-                        if (!grouped[scriptPath]) grouped[scriptPath] = [];
-                        grouped[scriptPath].push({ name, fn });
-                    }
-
-                    for (const [scriptPath, exports] of Object.entries(grouped)) {
-                        await t.step({
-                            name: scriptPath,
-                            sanitizeOps: false,
-                            sanitizeResources: false,
-                            sanitizeExit: false,
-                            async fn(fileStepCtx: any) {
-                                for (const { name, fn } of exports) {
-                                    await fileStepCtx.step({
-                                        name: typeof name === 'string' ? (name.startsWith("test") ? name.substring(4).trim() : name) : name,
-                                        sanitizeOps: false,
-                                        sanitizeResources: false,
-                                        sanitizeExit: false,
-                                        async fn(stepCtx: any) {
-                                            const guestT = createGuestTestContext(stepCtx);
-                                            if (payload.isSelfTest) {
-                                                (guestT as any).Deno = preservedDeno;
-                                                (guestT as any).WORKER_BIN = payload.webrunBin;
-                                                (guestT as any).IS_REPACKED_TEST = payload.isRepackedTest;
-                                            }
-                                            try {
-                                                contextPayload.command = scriptPath;
-                                                await fn(guestT, contextPayload);
-                                            } catch (err: any) {
-                                                if (err instanceof WebrunSkipError) {
-                                                    return;
-                                                }
-                                                throw err;
-                                            }
-                                        }
-                                    });
-                                }
+            for (const { name, fn, scriptPath } of allTestExports) {
+                const cleanName = typeof name === 'string' ? (name.startsWith("test") ? name.substring(4).trim() : name) : String(name);
+                testFn({
+                    name: cleanName,
+                    sanitizeOps: false,
+                    sanitizeResources: false,
+                    sanitizeExit: false,
+                    async fn(stepCtx: any) {
+                        const guestT = createGuestTestContext(stepCtx);
+                        if (payload.isSelfTest) {
+                            (guestT as any).Deno = preservedDeno;
+                            (guestT as any).WORKER_BIN = payload.webrunBin;
+                            (guestT as any).IS_REPACKED_TEST = payload.isRepackedTest;
+                        }
+                        try {
+                            contextPayload.command = scriptPath;
+                            await fn(guestT, contextPayload);
+                        } catch (err: any) {
+                            if (err instanceof WebrunSkipError) {
+                                return;
                             }
-                        });
+                            throw err;
+                        }
                     }
-                }
-            });
+                });
+            }
         } else {
             contextPayload.command = payload.targetScriptPath as string;
             const mod = await import(payload.targetUrlHref as string);
