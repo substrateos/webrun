@@ -13,6 +13,8 @@ To grant a script permission to access specific folders, network domains, or env
 
 - `-h, --help`
   Print the usage instructions.
+- `-e, --eval <code>`
+  Evaluate the provided inline JavaScript/TypeScript code directly in the sandbox instead of executing a file.
 - `--test`
   Discovers and runs exported functions starting with "test" inside your target script(s) instead of the default export. You can pass multiple scripts (e.g., `webrun --test a.ts b.ts`).
 - `--self-test`

@@ -35,18 +35,18 @@ export interface WebrunConfig {
     };
     importMap?: string;
 }
-
 export interface CommandInvocation {
-    action: "run" | "test";
+    action: "run" | "test" | "eval";
     isSelfTest?: boolean;
     targetScriptPath: string | string[];
+    evalCode?: string;
     sandboxArgs: string[];
     injectedArgsObj: Record<string, any>;
     networkFlags: string[];
 }
 
 export interface SandboxContextPayload {
-    action: "run" | "test";
+    action: "run" | "test" | "eval";
     isSelfTest?: boolean;
     webrunBin?: string;
     isRepackedTest?: boolean;
@@ -56,6 +56,7 @@ export interface SandboxContextPayload {
     finalEnvVars: Record<string, string>;
     targetUrlHref: string | string[];
     targetScriptPath: string | string[];
+    evalCode?: string;
     sandboxArgs: string[];
     opfsRoot: string;
     memoryMB?: number;
@@ -69,12 +70,28 @@ export function parseCommandInvocation(args: string[], config: WebrunConfig): Co
     const rawArgs = [...args];
     let isTest = false;
     let isSelfTest = false;
+    let isEval = false;
+    let evalCode = "";
 
     let targetScriptPath: string | string[] = "";
     const injectedArgsObj: Record<string, any> = { "--": [] };
     let onlyPositional = false;
     const testPaths: string[] = [];
     let scriptFound = false;
+
+    const evalIdxExt = rawArgs.findIndex(a => a === "--eval" || a === "-e");
+    if (evalIdxExt !== -1) {
+        if (evalIdxExt + 1 < rawArgs.length && rawArgs[evalIdxExt + 1] !== "--") {
+            evalCode = rawArgs[evalIdxExt + 1];
+            rawArgs.splice(evalIdxExt, 2);
+            isEval = true;
+            scriptFound = true;
+            targetScriptPath = "[eval]";
+        } else {
+            printUsageError("Usage: webrun --eval <code> [args...]");
+            Deno.exit(1);
+        }
+    }
 
     const selfTestIdx = rawArgs.indexOf("--self-test");
     if (selfTestIdx !== -1) {
@@ -95,7 +112,7 @@ export function parseCommandInvocation(args: string[], config: WebrunConfig): Co
         rawArgs.splice(testIdx, 1);
     }
 
-    if (rawArgs.length === 0 && !isTest) {
+    if (rawArgs.length === 0 && !isTest && !isEval) {
         printUsageError("Usage: webrun [options] <script.ts> [args...]\nRun with --help for documentation.");
         Deno.exit(1);
     }
@@ -154,7 +171,7 @@ export function parseCommandInvocation(args: string[], config: WebrunConfig): Co
             Deno.exit(1);
         }
         targetScriptPath = testPaths;
-    } else {
+    } else if (!isEval) {
         if (!scriptFound) {
             printUsageError("Usage: webrun [options] <script.ts> [args...]\nRun with --help for documentation.");
             Deno.exit(1);
@@ -172,9 +189,10 @@ export function parseCommandInvocation(args: string[], config: WebrunConfig): Co
     }
 
     return {
-        action: isTest ? "test" : "run",
+        action: isEval ? "eval" : (isTest ? "test" : "run"),
         isSelfTest,
         targetScriptPath: targetScriptPath!,
+        evalCode,
         sandboxArgs: rawArgs,
         injectedArgsObj,
         networkFlags
@@ -301,8 +319,33 @@ export function generateSeatbeltProfile(cwd: string, readEnclaves: string, write
 
 export function buildNodeSinkholeDependencies(isolatedTmp: string, importMapPaths: string[] = []): string {
     const sinkholeURI = "data:text/javascript,export default null; throw new Error('Security Error: Node/NPM modules are blocked.');";
+    
+    const contextCode = `
+export let args = [];
+export let flags = {};
+export let env = {};
+export let dir = undefined;
+export let command = "";
+export let persisted = false;
+
+let isSet = false;
+
+export function set(ctx) {
+    if (isSet) throw new Error("Security Error: webrun/ctx is already initialized");
+    isSet = true;
+    args = ctx.args || [];
+    flags = ctx.flags || {};
+    env = ctx.env || {};
+    dir = ctx.dir;
+    command = ctx.command || "";
+    persisted = !!ctx.persisted;
+}
+`;
+    const contextURI = `data:application/typescript;charset=utf-8,${encodeURIComponent(contextCode)}`;
+
     const importMapPayload: any = {
         imports: {
+            "webrun/ctx": contextURI,
             "node:fs": sinkholeURI,
             "node:child_process": sinkholeURI,
             "node:net": sinkholeURI,
@@ -849,9 +892,14 @@ export async function executeInsideSandbox(payload: SandboxContextPayload) {
             }
 
             if (allTestExports.length === 0) {
-                console.warn("\x1b[33m[Webrun]\x1b[0m No test exports found. Expected functions starting with 'test'.");
+                console.warn("[Webrun] No test exports found. Expected functions starting with 'test'.");
                 exitFn(0);
                 return;
+            }
+
+            const webrunCtxMod = await import("webrun/ctx").catch(() => null);
+            if (webrunCtxMod && webrunCtxMod.set) {
+                webrunCtxMod.set(contextPayload);
             }
 
             for (const { name, fn, scriptPath } of allTestExports) {
@@ -882,12 +930,17 @@ export async function executeInsideSandbox(payload: SandboxContextPayload) {
             }
         } else {
             contextPayload.command = payload.targetScriptPath as string;
+            
+            const webrunCtxMod = await import("webrun/ctx").catch(() => null);
+            if (webrunCtxMod && webrunCtxMod.set) {
+                webrunCtxMod.set(contextPayload);
+            }
+            
             const mod = await import(payload.targetUrlHref as string);
             const mainFn = typeof mod.default === 'function' ? mod.default : (mod.default && typeof mod.default.main === 'function' ? mod.default.main : null);
-            if (!mainFn) {
-                throw new Error("Worker script must export a default function or an object containing a 'main' function.");
+            if (mainFn) {
+                await mainFn(contextPayload);
             }
-            await mainFn(contextPayload);
             exitFn(0);
         }
     } catch (err: any) {
@@ -930,7 +983,7 @@ export async function spawnSandboxProcess(cwd: string, args: string[]) {
             } else {
                 readmeContent = Deno.readTextFileSync(resolve(dirname(selfPath), "README.md"));
             }
-            console.log(`Usage: webrun [options] <script.ts> [args...]\n\nOptions:\n  -h, --help         Print the usage instructions\n  --self-test         Run the built-in test suite to verify the sandbox is working correctly\n  --self-bundle <dest>    Package the webrun source files into a single executable file\n  --self-unbundle <dest>  Extract the webrun source files from the executable into a folder for editing\n  --test             Run the target script as a test suite instead of a standard program\n`);
+            console.log(`Usage: webrun [options] <script.ts> [args...]\n\nOptions:\n  -h, --help         Print the usage instructions\n  -e, --eval <code>  Evaluate the given code instead of reading from a file\n  --self-test        Run the built-in test suite to verify the sandbox is working correctly\n  --self-bundle      Package the webrun source files into a single executable file\n  --self-unbundle <dest>  Extract the webrun source files from the executable into a folder for editing\n  --test             Run the target script as a test suite instead of a standard program\n`);
             const contractMatch = readmeContent.match(/## API[^\n]*\n+([\s\S]*?)(\n## |$)/i);
             if (contractMatch && contractMatch[1]) {
                 console.log("==========================================");
@@ -992,9 +1045,14 @@ export async function spawnSandboxProcess(cwd: string, args: string[]) {
 
     // 4. Assemble Process Image
     const resolveTargetUrl = async (p: string) => p.startsWith("http") ? new URL(p).href : new URL(await import("node:url").then(m => m.pathToFileURL(p))).href;
-    const targetUrlHref = Array.isArray(invocation.targetScriptPath)
-        ? await Promise.all(invocation.targetScriptPath.map(resolveTargetUrl))
-        : await resolveTargetUrl(invocation.targetScriptPath as string);
+    let targetUrlHref: string | string[];
+    if (invocation.action === "eval") {
+        targetUrlHref = `data:application/typescript;charset=utf-8,${encodeURIComponent(invocation.evalCode!)}`;
+    } else {
+        targetUrlHref = Array.isArray(invocation.targetScriptPath)
+            ? await Promise.all(invocation.targetScriptPath.map(resolveTargetUrl))
+            : await resolveTargetUrl(invocation.targetScriptPath as string);
+    }
 
     const payloadObject: SandboxContextPayload = {
         action: invocation.action,
@@ -1007,6 +1065,7 @@ export async function spawnSandboxProcess(cwd: string, args: string[]) {
         finalEnvVars: computeRuntimeEnvironment(config.permissions?.env),
         targetUrlHref,
         targetScriptPath: invocation.targetScriptPath,
+        evalCode: invocation.evalCode,
         sandboxArgs: invocation.sandboxArgs,
         opfsRoot: opfsTmp,
         memoryMB: config.limits?.memoryMB
@@ -1020,7 +1079,7 @@ await executeInsideSandbox(payload);
     Deno.writeTextFileSync(bootstrapPath, bootstrapCode);
 
     const innerDenoArgs = [
-        invocation.action,
+        invocation.action === "eval" ? "run" : invocation.action,
         ...(invocation.isSelfTest ? [] : invocation.networkFlags),
         ...lockFlag,
         `--v8-flags=--max-old-space-size=${MAX_V8_MEM_MB}`,
