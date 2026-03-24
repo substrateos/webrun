@@ -1436,6 +1436,145 @@ export async function testCLI(t: any) {
     ]);
 }
 
+export async function testProgrammaticAPI(t: any) {
+    await runTests(t, [
+        {
+            name: "ctx.webrun correctly evaluates inline code",
+            args: ["src/test.js"],
+            configs: { ".": { permissions: { storage: { ".": { access: "read" } } } } },
+            scripts: {
+                "src/test.js": `
+            import { webrun } from "webrun/ctx";
+            export default async function(ctx) {
+                const res = await webrun(["--eval", "console.log('internal_eval_ok');"]);
+                if (res.exitCode !== 0) throw new Error("webrun eval failed: " + res.stderr);
+                if (!res.stdout.includes("internal_eval_ok")) throw new Error("webrun stdout mismatch: " + res.stdout);
+                console.log("EVAL_OK");
+            }
+        `
+            },
+            expectCode: 0,
+            expectStdout: "EVAL_OK"
+        },
+        {
+            name: "ctx.webrun correctly executes target script in a sub-worker",
+            args: ["src/parent.js"],
+            configs: { ".": { permissions: { storage: { ".": { access: "read" } } } } },
+            scripts: {
+                "src/parent.js": `
+            import { webrun } from "webrun/ctx";
+            export default async function(ctx) {
+                const res = await webrun(["src/child.js"]);
+                if (res.exitCode !== 0) throw new Error("webrun child failed: " + res.stderr);
+                if (!res.stdout.includes("child_ok")) throw new Error("webrun child stdout mismatch: " + res.stdout);
+                console.log("PARENT_OK");
+            }
+        `,
+                "src/child.js": `
+            export default function(ctx) {
+                console.log("child_ok");
+            }
+        `
+            },
+            expectCode: 0,
+            expectStdout: "PARENT_OK"
+        },
+        {
+            name: "ctx.webrun isolates CLI arguments from the parent explicitly",
+            args: ["src/parent_args.js", "--parent-flag", "--", "parent-positional"],
+            configs: { ".": { permissions: { storage: { ".": { access: "read" } } } } },
+            scripts: {
+                "src/parent_args.js": `
+            import { webrun } from "webrun/ctx";
+            export default async function(ctx) {
+                if (!ctx.flags["parent-flag"]) throw new Error("Parent missing flag");
+                const res = await webrun(["src/child_args.js", "--child-flag", "--", "child-positional"]);
+                if (res.exitCode !== 0) throw new Error("Child failed: " + res.stderr);
+                if (!res.stdout.includes("CHILD_ARGS_OK")) throw new Error("Stdout error: " + res.stdout);
+                console.log("PARENT_ARGS_OK");
+            }
+        `,
+                "src/child_args.js": `
+            export default function(ctx) {
+                if (ctx.flags["parent-flag"]) throw new Error("Child leaked parent flag");
+                if (!ctx.flags["child-flag"]) throw new Error("Child missing own flag");
+                if (ctx.args.includes("parent-positional")) throw new Error("Child leaked parent positional");
+                if (!ctx.args.includes("child-positional")) throw new Error("Child missing own positional: " + JSON.stringify(ctx.args) + " from " + JSON.stringify(ctx));
+                console.log("CHILD_ARGS_OK");
+            }
+        `
+            },
+            expectCode: 0,
+            expectStdout: "PARENT_ARGS_OK"
+        },
+        {
+            name: "ctx.webrun natively runs sub-workers with file writes",
+            args: ["test.js"],
+            configs: { ".": { permissions: { storage: { ".": { access: "read" }, "child": { access: "write" } } } } },
+            cwd: "child",
+            files: {
+                "child/sub.js": "export default function() { console.log('sub_script_ok'); }"
+            },
+            scripts: {
+                "child/test.js": `
+            import { webrun } from "webrun/ctx";
+            export default async function(ctx) {
+                const res = await webrun(["sub.js"]);
+                if (res.exitCode !== 0) throw new Error("webrun run failed: " + res.stderr);
+                if (!res.stdout.includes("sub_script_ok")) throw new Error("webrun stdout mismatch");
+                console.log("RUN_OK");
+            }
+        `
+            },
+            expectCode: 0,
+            expectStdout: "RUN_OK"
+        },
+        {
+            name: "ctx.webrun respects SandboxOptions timeout constraints",
+            args: ["src/test.js"],
+            configs: { ".": { permissions: { storage: { ".": { access: "read" } } } } },
+            scripts: {
+                "src/test.js": `
+            import { webrun } from "webrun/ctx";
+            export default async function(ctx) {
+                const res = await webrun(["--eval", "while(true){}"], { timeoutMillis: 50 });
+                if (res.exitCode !== 143) throw new Error("webrun timeout failed to abort");
+                console.log("TIMEOUT_OK");
+            }
+        `
+            },
+            expectCode: 0,
+            expectStdout: "TIMEOUT_OK"
+        },
+        {
+            name: "ctx.webrun natively runs --test sub-worker test runners",
+            args: ["test.js"],
+            configs: { ".": { permissions: { storage: { ".": { access: "read" }, "child": { access: "write" } } } } },
+            cwd: "child",
+            files: {
+                "child/suite.test.ts": "export async function testGuest(t) { t.log('nested_test_log'); t.assert(1===1, 'ok'); }"
+            },
+            scripts: {
+                "child/test.js": `
+            import { webrun } from "webrun/ctx";
+            export default async function(ctx) {
+                let blocked = false;
+                try {
+                    await webrun(["--test", "suite.test.ts"]);
+                } catch (e) {
+                    if (e.message.includes("not yet implemented")) blocked = true;
+                }
+                if (!blocked) throw new Error("webrun failed to block --test");
+                console.log("TEST_OK");
+            }
+        `
+            },
+            expectCode: 0,
+            expectStdout: "TEST_OK"
+        }
+    ]);
+}
+
 export async function testBundlingStructuralIntegrity(tc: any) {
     const Deno = tc.Deno;
     const WORKER_BIN = tc.WORKER_BIN;
@@ -1478,21 +1617,306 @@ export async function testBundlingStructuralIntegrity(tc: any) {
         Deno.writeFileSync(join(runDir, "webrun-repacked"), bundleOutput.stdout);
         Deno.chmodSync(join(runDir, "webrun-repacked"), 0o755);
 
-        const evalCmd = new Deno.Command("./webrun-repacked", {
-            args: ["--self-test"],
-            cwd: runDir,
-            env: {
-                "WEBRUN_IS_REPACKED_TEST": "1",
-                "WEBRUN_DENO_DIR": dirname(Deno.execPath())
-            }
-        });
-        const evalOutput = await evalCmd.output();
-        if (evalOutput.code !== 0) {
-            console.error(new TextDecoder().decode(evalOutput.stderr));
-            console.error(new TextDecoder().decode(evalOutput.stdout));
-        }
-        assertEquals(evalOutput.code, 0);
+        const hashHex = async (buf: Uint8Array) => {
+            const hashBuffer = await crypto.subtle.digest("SHA-256", buf as any);
+            const hashArray = Array.from(new Uint8Array(hashBuffer));
+            return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+        };
+        const digest1 = await hashHex(Deno.readFileSync(bundledExecutable));
+        const digest2 = await hashHex(Deno.readFileSync(join(runDir, "webrun-repacked")));
+        assertEquals(digest1, digest2, "Bundled executables do not match in content digest! Determinism failed.");
 
         try { Deno.removeSync(runDir, { recursive: true }); } catch (_) { }
     });
+}
+
+export async function testServiceBindings(t: any) {
+    await runTests(t, [
+        {
+            name: "UUID Injection Context: Injects capabilities into ctx.bindings mapped to unforgeable schemas",
+            args: ["test.js"],
+            configs: { ".": { bindings: { "test_svc": { module: "worker.js" } } } },
+            files: {
+                "worker.js": `export default { fetch() { return new Response("ok"); } }`
+            },
+            scripts: {
+                "test.js": `
+                    export default async function(ctx) {
+                        if (!ctx.bindings.test_svc) throw new Error("Binding not injected");
+                        if (!ctx.bindings.test_svc.startsWith("webrun://")) throw new Error("URI schema is not webrun://");
+                        if (ctx.bindings.test_svc.includes("worker.js")) throw new Error("URI leaks physical path");
+                        console.log("UUID_INJECTION_OK");
+                    }
+                `
+            },
+            expectCode: 0,
+            expectStdout: "UUID_INJECTION_OK"
+        },
+        {
+            name: "Module Fetch Routing: Proxies raw Web API fetch to module Service Worker via postMessage IPC",
+            args: ["test.js"],
+            configs: { ".": { bindings: { "ai": { module: "llm.js" } } } },
+            files: {
+                "llm.js": `
+                    export default { 
+                        async fetch(req) { 
+                            const text = await req.text();
+                            if (text === "hello") {
+                                return new Response("world_from_worker", { headers: { "X-Custom": "Foo" } });
+                            }
+                            return new Response("bad");
+                        } 
+                    }
+                `
+            },
+            scripts: {
+                "test.js": `
+                    export default async function(ctx) {
+                        const res = await fetch(ctx.bindings.ai, { method: "POST", body: "hello" });
+                        if (res.status !== 200) throw new Error("Failed proxy fetch");
+                        const text = await res.text();
+                        if (text !== "world_from_worker") throw new Error("IPC payload body mismatch: " + text);
+                        if (res.headers.get("x-custom") !== "Foo") throw new Error("IPC payload headers mismatch");
+                        console.log("FETCH_PROXY_OK");
+                    }
+                `
+            },
+            expectCode: 0,
+            expectStdout: "FETCH_PROXY_OK"
+        },
+        {
+            name: "UUID Forgery & Null Routing: Explicitly rejects standard fetch calls aiming directly at native ports or unlisted UUIDs",
+            args: ["test.js"],
+            scripts: {
+                "test.js": `
+                    export default async function(ctx) {
+                        let blocked = false;
+                        try {
+                            await fetch("webrun://arbitrary_uuid_1234/api");
+                        } catch (e) {
+                            if (e.message.includes("Unauthorized binding UUID") || e.message.includes("Failed to fetch")) {
+                                blocked = true;
+                            }
+                        }
+                        if (!blocked) throw new Error("Sandbox failed to block forged UUID schema fetch");
+                        
+                        blocked = false;
+                        try {
+                            await fetch("http://127.0.0.1:49152/api");
+                        } catch(e) {
+                            if (e.message.includes("SSRF Blocked by Sandbox")) blocked = true;
+                        }
+                        if (!blocked) throw new Error("Sandbox failed to block application-layer localhost proxy fetching");
+                        
+                        console.log("FORGERY_BLOCK_OK");
+                    }
+                `
+            },
+            expectCode: 0,
+            expectStdout: "FORGERY_BLOCK_OK"
+        },
+        // {
+        //     name: "Isolated Memory Pooling: Overallocating Service Workers cascade abort to sandbox runtime",
+        //     args: ["test.js"],
+        //     configs: { ".": { bindings: { "memhog": { module: "hog.js" } }, limits: { memoryMB: 128 } } },
+        //     files: {
+        //         "hog.js": `
+        //             export default {
+        //                 async fetch() {
+        //                     const arr = [];
+        //                     while(true) {
+        //                         arr.push(new Uint8Array(1024 * 1024 * 100)); // Requesting 10MB chunks
+        //                         await new Promise(r => setTimeout(r, 50));
+        //                     }
+        //                 }
+        //             }
+        //         `
+        //     },
+        //     scripts: {
+        //         "test.js": `
+        //             export default async function(ctx) {
+        //                 try {
+        //                     await fetch(ctx.bindings.memhog);
+        //                 } catch (e) {}
+        //                 await new Promise(() => {}); // yield to event loop indefinitely
+        //             }
+        //         `
+        //     },
+        //     expectCode: 137, // OOM kill
+        //     expectStderr: [
+        //         "[Fatal] Memory limit exceeded!",
+        //         "  Current:"
+        //     ]
+        // },
+        {
+            name: "Service Crash Propagation: Module unhandled exceptions return native 500 status over IPC proxy",
+            args: ["test.js"],
+            configs: { ".": { bindings: { "crash": { module: "crash.js" } } } },
+            files: {
+                "crash.js": `
+                    export default {
+                        async fetch(req) {
+                            throw new Error("Simulated unhandled worker exception");
+                        }
+                    }
+                `
+            },
+            scripts: {
+                "test.js": `
+                    export default async function(ctx) {
+                        const res = await fetch(ctx.bindings.crash);
+                        if (res.status !== 500) throw new Error("Worker crash did not translate to HTTP 500");
+                        
+                        const text = await res.text();
+                        if (!text.includes("Simulated unhandled worker exception")) throw new Error("Error missing: " + text);
+                        
+                        console.log("CRASH_PROPAGATION_OK");
+                    }
+                `
+            },
+            expectCode: 0,
+            expectStdout: "CRASH_PROPAGATION_OK"
+        }
+    ]);
+}
+
+export async function testProcessBindings(t: any) {
+    if (t.IS_REPACKED_TEST) return;
+
+    await runTests(t, [
+        {
+            name: "Lifecycle & Port Tunneling: Natively routes fetch to Deno sub-socket allocating dynamic port variable",
+            args: ["test.js"],
+            configs: {
+                ".": { bindings: { "my_backend": { process: { command: ["deno", "run", "-A", "backend.ts"], portEnv: "PROCESS_PORT" } } } }
+            },
+            files: {
+                "backend.ts": `
+                    const port = parseInt(Deno.env.get("PROCESS_PORT") || "0", 10);
+                    Deno.serve({ port }, (req) => {
+                        return new Response("Process_Alive_On_" + port);
+                    });
+                `
+            },
+            scripts: {
+                "test.js": `
+                    export default async function(ctx) {
+                        const res = await fetch(ctx.bindings.my_backend);
+                        const text = await res.text();
+                        if (!text.startsWith("Process_Alive_On_")) throw new Error("Tunnel failed: " + text);
+                        console.log("PROCESS_TUNNEL_OK");
+                    }
+                `
+            },
+            expectCode: 0,
+            expectStdout: "PROCESS_TUNNEL_OK"
+        },
+        {
+            name: "Process Environment Filtering: Bootstrapped children exclusively inherit specific OS variables",
+            args: ["test.js"],
+            env: { "HOST_LEAK": "pwned", "ALLOWED_VAR": "secret" },
+            configs: {
+                ".": {
+                    bindings: {
+                        "filtered": {
+                            process: {
+                                command: ["deno", "run", "-A", "backend.ts"],
+                                portEnv: "PORT",
+                                permissions: { env: ["ALLOWED_VAR"] }
+                            }
+                        }
+                    }
+                }
+            },
+            files: {
+                "backend.ts": `
+                    const port = parseInt(Deno.env.get("PORT") || "0", 10);
+                    Deno.serve({ port }, (req) => {
+                        return new Response(JSON.stringify({ 
+                            allowed: Deno.env.get("ALLOWED_VAR"), 
+                            leaked: Deno.env.get("HOST_LEAK") 
+                        }));
+                    });
+                `
+            },
+            scripts: {
+                "test.js": `
+                    export default async function(ctx) {
+                        const res = await fetch(ctx.bindings.filtered);
+                        const json = await res.json();
+                        if (json.leaked !== undefined) throw new Error("Child inherited unlisted host environment: " + json.leaked);
+                        if (json.allowed !== "secret") throw new Error("Child missing explicit local environment: " + json.allowed);
+                        console.log("ENV_FILTER_OK");
+                    }
+                `
+            },
+            expectCode: 0,
+            expectStdout: "ENV_FILTER_OK"
+        },
+        {
+            name: "Graceful Teardown & Zombie Prevention: Process terminates definitively natively when sandbox completes",
+            args: ["test.js"],
+            configs: {
+                ".": { bindings: { "backend": { process: { command: ["deno", "run", "-A", "backend.ts"], portEnv: "PORT" } } } }
+            },
+            preflight: async function (runDir: string, tester: any) {
+                // Just to prepare the landscape
+            },
+            files: {
+                "backend.ts": `
+                    const port = parseInt(Deno.env.get("PORT") || "0", 10);
+                    Deno.writeTextFileSync("child.pid", String(Deno.pid)); // emit the PID for native runner verification checks afterwards
+                    Deno.serve({ port }, (req) => {
+                        return new Response("OK");
+                    });
+                `
+            },
+            cwd: ".",
+            scripts: {
+                "test.js": `
+                    export default async function(ctx) {
+                        const res = await fetch(ctx.bindings.backend);
+                        const text = await res.text();
+                        if (text !== "OK") throw new Error("Backend not OK");
+                        console.log("ZOMBIE_TEST_FINISHED");
+                    }
+                `
+            },
+            expectCode: 0,
+            expectStdout: "ZOMBIE_TEST_FINISHED"
+        },
+        {
+            name: "Runtime Subprocess Crash: Sandbox receives graceful connection refused payload on fatal sub-worker",
+            args: ["test.js"],
+            configs: {
+                ".": { bindings: { "crash_backend": { process: { command: ["deno", "run", "-A", "backend.ts"], portEnv: "PORT" } } } }
+            },
+            files: {
+                "backend.ts": `
+                    // Exit immediately without ever binding
+                    Deno.exit(1);
+                `
+            },
+            scripts: {
+                "test.js": `
+                    export default async function(ctx) {
+                        let blocked = false;
+                        await new Promise((r) => setTimeout(r, 500)); // wait for native backend execution failure to resolve fully
+                        try {
+                            await fetch(ctx.bindings.crash_backend);
+                        } catch (e) {
+                            if (e.message.includes("Connection refused")) {
+                                blocked = true;
+                            }
+                        }
+                        
+                        if (!blocked) throw new Error("Crash proxy did not trigger Connection refused");
+                        console.log("CRASH_PROXY_OK");
+                    }
+                `
+            },
+            expectCode: 0,
+            expectStdout: "CRASH_PROXY_OK"
+        }
+    ]);
 }

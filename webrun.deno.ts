@@ -1,4 +1,4 @@
-import { resolve, dirname } from "https://deno.land/std@0.224.0/path/mod.ts";
+import { resolve, dirname, extname, join, globToRegExp, normalize, isAbsolute } from "https://deno.land/std@0.224.0/path/mod.ts";
 import { pathToFileURL } from "node:url";
 
 export interface Sys {
@@ -110,7 +110,9 @@ export interface WebrunConfig {
         storage?: Record<string, { access: "read" | "write" }>;
         network?: string[];
         env?: string[];
+        bindings?: string[];
     };
+    bindings?: Record<string, any>;
     importMap?: string;
 }
 export interface CommandInvocation {
@@ -138,6 +140,8 @@ export interface SandboxContextPayload {
     sandboxArgs: string[];
     opfsRoot: string;
     memoryMB?: number;
+    bindingsMap: Record<string, { type: "process" | "module"; uuid: string; path?: string; port?: number }>;
+    allowedBindings: Record<string, { access: "read" | "write" }>;
 }
 
 // =========================================================
@@ -284,7 +288,7 @@ export function resolveExecutionMode(parsed: ParsedArgs): "run" | "test" | "eval
 }
 
 export function buildNetworkFlags(allowedDomains: string[]): string[] {
-    const SSRF_BLOCK = "--deny-net=127.0.0.0/8,localhost,0.0.0.0/8,10.0.0.0/8,192.168.0.0/16,172.16.0.0/12,169.254.0.0/16";
+    const SSRF_BLOCK = "--deny-net=10.0.0.0/8,192.168.0.0/16,172.16.0.0/12,169.254.0.0/16";
     const networkFlags: string[] = [];
     if (allowedDomains.length > 0) {
         networkFlags.push(`--allow-net=${allowedDomains.join(",")}`);
@@ -325,14 +329,16 @@ export interface EnclavePolicy {
     storageRoot: string;
     allowedReadPaths: string[];
     allowedWritePaths: string[];
+    allowedBindings: string[];
 }
 
-export function evaluateEnclavePolicy(configDirs: Record<string, { access: "read" | "write" }>, configDir: string, currentDir: string, isolatedTmp: string): EnclavePolicy {
+export function evaluateEnclavePolicy(configDirs: Record<string, { access: "read" | "write" }>, configBindings: string[], configDir: string, currentDir: string, isolatedTmp: string): EnclavePolicy {
     let isPwdAllowed = false;
     const fallbackToTemp = Object.keys(configDirs).length === 0;
 
     const allowedReadPaths: string[] = [];
     const allowedWritePaths: string[] = [];
+    const allowedBindings: string[] = [];
 
     for (const [fsPath, settings] of Object.entries(configDirs)) {
         const absFsPath = resolve(configDir, fsPath);
@@ -346,6 +352,10 @@ export function evaluateEnclavePolicy(configDirs: Record<string, { access: "read
         }
     }
 
+    for (const bindingName of configBindings || []) {
+        allowedBindings.push(bindingName);
+    }
+
     if (fallbackToTemp) {
         allowedReadPaths.push(currentDir);
     }
@@ -355,12 +365,14 @@ export function evaluateEnclavePolicy(configDirs: Record<string, { access: "read
         fallbackToTemp,
         allowedReadPaths,
         allowedWritePaths,
-        storageRoot: fallbackToTemp ? isolatedTmp : currentDir
+        storageRoot: fallbackToTemp ? isolatedTmp : currentDir,
+        allowedBindings
     };
 }
 
-export function generateDenoStorageFlags(policy: EnclavePolicy, isolatedTmp: string, runnerTmp: string, opfsTmp: string): string[] {
-    const r = [isolatedTmp, ...policy.allowedReadPaths, runnerTmp, opfsTmp];
+export function generateDenoStorageFlags(policy: EnclavePolicy, isolatedTmp: string, runnerTmp: string, opfsTmp: string, bindingSdksTmp: string): string[] {
+    const selfPath = tryRealpathSync(new URL(import.meta.url).pathname) || new URL(import.meta.url).pathname;
+    const r = [isolatedTmp, ...policy.allowedReadPaths, runnerTmp, opfsTmp, selfPath, bindingSdksTmp];
     const w = [isolatedTmp, ...policy.allowedWritePaths, opfsTmp];
     return [
         `--allow-read=${r.join(",")}`,
@@ -368,14 +380,18 @@ export function generateDenoStorageFlags(policy: EnclavePolicy, isolatedTmp: str
     ];
 }
 
-export function generateSeatbeltEnclaveStrings(policy: EnclavePolicy, runnerTmp: string, opfsTmp: string): { readEnclaves: string, writeEnclaves: string } {
+export function generateSeatbeltEnclaveStrings(policy: EnclavePolicy, runnerTmp: string, opfsTmp: string, bindingSdksTmp: string): { readEnclaves: string, writeEnclaves: string } {
     let readEnclaves = "";
     let writeEnclaves = "";
+
+    const selfPath = tryRealpathSync(new URL(import.meta.url).pathname) || new URL(import.meta.url).pathname;
+    readEnclaves += `\n    (subpath "${selfPath}")`;
 
     for (const p of policy.allowedReadPaths) {
         readEnclaves += `\n    (subpath "${p}")`;
     }
     readEnclaves += `\n    (subpath "${runnerTmp}")`;
+    readEnclaves += `\n    (subpath "${bindingSdksTmp}")`;
 
     for (const p of policy.allowedWritePaths) {
         writeEnclaves += `\n    (subpath "${p}")`;
@@ -385,7 +401,12 @@ export function generateSeatbeltEnclaveStrings(policy: EnclavePolicy, runnerTmp:
     return { readEnclaves, writeEnclaves };
 }
 
-export function generateSeatbeltProfile(cwd: string, readEnclaves: string, writeEnclaves: string): string {
+export function generateSeatbeltProfile(cwd: string, readEnclaves: string, writeEnclaves: string, ephemeralPorts: number[] = []): string {
+    let extraNetwork = "";
+    for (const port of ephemeralPorts) {
+        extraNetwork += `\n    (remote tcp "localhost:${port}")`;
+    }
+
     return `(version 1)
 (deny default)
 (import "bsd.sb")
@@ -430,7 +451,7 @@ export function generateSeatbeltProfile(cwd: string, readEnclaves: string, write
     (remote tcp "*:443")
     (remote tcp "*:80")  
     (remote udp "*:53")  
-    (literal "/private/var/run/mDNSResponder")
+    (literal "/private/var/run/mDNSResponder")${extraNetwork}
 )
 
 (allow file-read* file-write*
@@ -461,8 +482,12 @@ export let env = {};
 export let dir = undefined;
 export let command = "";
 export let persisted = false;
+export let bindings = {};
 
 let isSet = false;
+let __rootUrl = "";
+let __parentPayload = null;
+let __webrunEntryUrl = "";
 
 export function set(ctx) {
     if (isSet) throw new Error("Security Error: webrun/ctx is already initialized");
@@ -471,8 +496,112 @@ export function set(ctx) {
     flags = ctx.flags || {};
     env = ctx.env || {};
     dir = ctx.dir;
-    command = ctx.command || "";
+    command = ctx.command || {};
     persisted = !!ctx.persisted;
+    bindings = ctx.bindings || {};
+    __rootUrl = ctx.__internalRootUrl || "";
+    __parentPayload = ctx.__parentPayload;
+    __webrunEntryUrl = ctx.__webrunEntryUrl;
+}
+
+export async function webrun(spawnArgs, options = {}) {
+    if (spawnArgs.includes("--test")) {
+        throw new Error("not yet implemented");
+    }
+    return new Promise((resolve) => {
+        const workerCode = \`
+            import { executeInsideSandbox, parseRawArguments } from "\${__webrunEntryUrl}";
+            
+            self.onmessage = async (e) => {
+                if (e.data.type === "spawn") {
+                    const preservedDeno = globalThis.Deno;
+                    preservedDeno.exit = (code) => {
+                        self.postMessage({ type: "exit", code });
+                        self.close();
+                    };
+                    
+                    console.log = (...a) => { self.postMessage({ type: "stdout", chunk: a.map(String).join(" ") }); };
+                    console.error = (...a) => { self.postMessage({ type: "stderr", chunk: a.map(String).join(" ") }); };
+                    
+                    try {
+                        const childPayload = e.data.payload;
+                        const parsed = parseRawArguments(childPayload.sandboxArgs);
+                        childPayload.injectedArgsObj = parsed.injectedArgsObj;
+                        
+                        // Construct targetUrlHref natively from parsed inputs
+                        childPayload.action = parsed.isEval ? "eval" : (parsed.isTest ? "test" : "run");
+                        if (parsed.isEval) {
+                            childPayload.targetScriptPath = "[eval]";
+                            childPayload.targetUrlHref = "data:application/typescript;charset=utf-8," + encodeURIComponent(parsed.evalCode);
+                            childPayload.evalCode = parsed.evalCode;
+                        } else {
+                            childPayload.targetScriptPath = parsed.targetScriptPath;
+                            childPayload.evalCode = undefined;
+                            
+                            const rootUrl = childPayload.__internalRootUrl;
+                            const resolveUrl = (p) => p.startsWith("http") ? new URL(p).href : new URL(p, rootUrl).href;
+                            childPayload.targetUrlHref = Array.isArray(parsed.targetScriptPath)
+                                ? parsed.targetScriptPath.map(resolveUrl)
+                                : resolveUrl(parsed.targetScriptPath);
+                        }
+                        
+                        await executeInsideSandbox(childPayload);
+                    } catch (err) {
+                        console.error(err.message || String(err));
+                        preservedDeno.exit(1);
+                    }
+                }
+            };
+        \`;
+        
+        const blobUrl = URL.createObjectURL(new Blob([workerCode], { type: "application/javascript" }));
+        
+        const workerOptions = { 
+            type: "module", 
+            name: "webrun-sub-worker"
+        };
+        // Inherit parent constraints securely so the worker can load the webrun polyfill itself
+        workerOptions.deno = { permissions: "inherit" };
+        
+        const worker = new Worker(blobUrl, workerOptions);
+        
+        let stdout = "";
+        let stderr = "";
+        
+        let timer;
+        worker.onmessage = (e) => {
+            if (e.data.type === "stdout") stdout += e.data.chunk + "\\n";
+            else if (e.data.type === "stderr") stderr += e.data.chunk + "\\n";
+            else if (e.data.type === "exit") {
+                if (timer) clearTimeout(timer);
+                URL.revokeObjectURL(blobUrl);
+                resolve({ stdout, stderr, exitCode: e.data.code });
+            }
+        };
+        worker.onerror = (e) => {
+            if (timer) clearTimeout(timer);
+            URL.revokeObjectURL(blobUrl);
+            resolve({ stdout, stderr: stderr + "\\n" + e.message, exitCode: 1 });
+        };
+        
+        if (options.timeoutMillis) {
+            timer = setTimeout(() => {
+                worker.terminate();
+                URL.revokeObjectURL(blobUrl);
+                resolve({ stdout, stderr: stderr + "\\nTimeout limit reached", exitCode: 143 });
+            }, options.timeoutMillis);
+        }
+        
+        const childPayload = { ...__parentPayload };
+        childPayload.__internalRootUrl = __rootUrl;
+        
+        // Do not mutate spawnArgs directly here, parseRawArguments needs the original structure
+        childPayload.sandboxArgs = [...spawnArgs];
+        if (options.memoryMB) childPayload.memoryMB = options.memoryMB;
+        if (options.env) childPayload.finalEnvVars = options.env;
+        
+        worker.postMessage({ type: "spawn", payload: childPayload });
+    });
 }
 `;
     const contextURI = `data:application/typescript;charset=utf-8,${encodeURIComponent(contextCode)}`;
@@ -850,10 +979,19 @@ export function findLocalConfigurations(currentDir: string): FoundConfig[] {
         }
 
         if (foundConfig) {
-            if (!foundConfig.permissions) foundConfig.permissions = { storage: {}, network: [], env: [] };
+            if (!foundConfig.permissions) foundConfig.permissions = { storage: {}, network: [], env: [], bindings: [] };
             if (!foundConfig.permissions.storage) foundConfig.permissions.storage = {};
             if (!foundConfig.permissions.network) foundConfig.permissions.network = [];
             if (!foundConfig.permissions.env) foundConfig.permissions.env = [];
+            if (!foundConfig.permissions.bindings) foundConfig.permissions.bindings = [];
+
+            if (foundConfig.bindings) {
+                for (const key of Object.keys(foundConfig.bindings)) {
+                    if (!foundConfig.permissions.bindings.includes(key)) {
+                        foundConfig.permissions.bindings.push(key);
+                    }
+                }
+            }
 
             allConfigs.push({ config: foundConfig, dir: configDir, path: foundPath });
         }
@@ -914,6 +1052,20 @@ export function validatePrivilegeNarrowing(parentConfig: WebrunConfig, parentDir
         }
     }
 
+    if (childConfig.permissions?.bindings) {
+        for (const bindingName of childConfig.permissions.bindings) {
+            if (!parentConfig.permissions?.bindings?.includes(bindingName)) {
+                printSecurityFatal("Privilege escalation detected in nested configuration.", {
+                    Reason: "Escalating 'bindings' permissions",
+                    Attempted: bindingName,
+                    Child: childDir,
+                    Parent: parentDir
+                });
+                sys.exit(1);
+            }
+        }
+    }
+
     const parentStorageAbs = Object.entries(parentConfig.permissions!.storage!).map(([k, v]: [string, any]) => ({ path: resolve(parentDir, k), access: v.access }));
     const childStorageAbs = Object.entries(childConfig.permissions!.storage!).map(([k, v]: [string, any]) => ({ path: resolve(childDir, k), access: v.access }));
 
@@ -942,7 +1094,7 @@ export function validatePrivilegeNarrowing(parentConfig: WebrunConfig, parentDir
 
 export function mergeConfigurations(allConfigs: FoundConfig[], defaultDir: string): { config: WebrunConfig, configDir: string, configFound: boolean, configPaths: string[], importMapPaths: string[] } {
     const importMapPaths: string[] = [];
-    const finalConfig: WebrunConfig = { limits: { timeoutMillis: 120000, memoryMB: 512 }, permissions: { storage: {}, network: [], env: [] } };
+    const finalConfig: WebrunConfig = { limits: { timeoutMillis: 120000, memoryMB: 512 }, permissions: { storage: {}, network: [], env: [], bindings: [] } };
     let finalConfigDir = defaultDir;
     let configFound = false;
 
@@ -956,6 +1108,22 @@ export function mergeConfigurations(allConfigs: FoundConfig[], defaultDir: strin
         }
 
         Object.assign(finalConfig.permissions!, mostSpecific.config.permissions);
+
+        for (let i = allConfigs.length - 1; i >= 0; i--) {
+            const cfg = allConfigs[i].config;
+            const dir = allConfigs[i].dir;
+            if (cfg.bindings) {
+                if (!finalConfig.bindings) finalConfig.bindings = {};
+                const parsedBindings = JSON.parse(JSON.stringify(cfg.bindings));
+                for (const v of Object.values(parsedBindings) as any[]) {
+                    if (v.module && !v.module.startsWith("/")) {
+                        v.module = resolve(dir, v.module);
+                    }
+                }
+                Object.assign(finalConfig.bindings, parsedBindings);
+            }
+        }
+
 
         for (let i = allConfigs.length - 1; i >= 0; i--) {
             const cfg = allConfigs[i].config;
@@ -1034,8 +1202,14 @@ export async function executeTestPayload(payload: SandboxContextPayload, context
         webrunCtxMod.set(contextPayload);
     }
 
+    const filterStr = contextPayload.flags?.filter;
+
     for (const { name, fn, scriptPath } of allTestExports) {
         const cleanName = typeof name === 'string' ? (name.startsWith("test") ? name.substring(4).trim() : name) : String(name);
+        if (filterStr && !cleanName.includes(filterStr) && !name.includes(filterStr)) {
+            continue;
+        }
+
         preservedDeno.test({
             name: cleanName,
             sanitizeOps: false,
@@ -1052,7 +1226,7 @@ export async function executeTestPayload(payload: SandboxContextPayload, context
                     contextPayload.command = scriptPath;
                     await fn(guestT, contextPayload);
                 } catch (err: any) {
-                    if (err instanceof WebrunSkipError) {
+                    if (err instanceof WebrunSkipError || err?.name === "WebrunSkipError") {
                         return;
                     }
                     throw err;
@@ -1136,6 +1310,88 @@ export async function executeInsideSandbox(payload: SandboxContextPayload) {
         setupMemoryMonitor(payload.memoryMB, preservedDeno);
     }
 
+    const originalFetch = globalThis.fetch;
+    const moduleWorkers: Record<string, any> = {};
+    const proxyMap: Record<string, string> = {};
+
+    for (const [name, b] of Object.entries(payload.bindingsMap || {})) {
+        if (b.type === 'process') {
+            proxyMap[b.uuid] = `http://127.0.0.1:${b.port}`;
+        } else if (b.type === 'module') {
+            const workerUrl = new URL(b.path as string, `file://${payload.storageRoot}/`).href;
+            const w = new (globalThis as any).Worker(
+                `data:application/javascript,import mod from "${workerUrl}"; self.onmessage = async (e) => { const { id, req } = e.data; try { const r = await (mod.default ? mod.default.fetch : mod.fetch)(new Request(req.url, req)); const buf = await r.arrayBuffer(); const headers = {}; for (const [k,v] of r.headers) headers[k]=v; self.postMessage({ id, status: r.status, headers, body: buf }, [buf]); } catch (err) { self.postMessage({ id, error: err.message }); } };`,
+                { type: "module", deno: { permissions: "inherit" } }
+            );
+            moduleWorkers[b.uuid] = w;
+            proxyMap[b.uuid] = 'worker';
+        }
+    }
+
+    let fetchMsgId = 0;
+    const workerResolvers: Record<number, any> = {};
+    for (const w of Object.values(moduleWorkers)) {
+        w.onmessage = (e: any) => {
+            const res = workerResolvers[e.data.id];
+            if (res) {
+                if (e.data.error) {
+                    printExecutionError(e.data.error);
+                    res.resolve(new Response(e.data.error, { status: 500 }));
+                } else {
+                    res.resolve(new Response(e.data.body, { status: e.data.status, headers: e.data.headers }));
+                }
+                delete workerResolvers[e.data.id];
+            }
+        };
+    }
+
+    globalThis.fetch = async function(resource: any, init?: any) {
+        if (!resource) throw new TypeError("Failed to fetch: Request cannot be constructed from undefined");
+        const urlReq = typeof resource === 'string' ? resource : resource.url;
+        const urlObj = new URL(urlReq);
+        if (urlObj.protocol === 'webrun:') {
+            const uuid = urlObj.hostname;
+            const route = proxyMap[uuid];
+            if (!route) throw new TypeError(`Failed to fetch: No binding mapped to ${urlObj.href}`);
+            
+            if (route === 'worker') {
+                const w = moduleWorkers[uuid];
+                const id = ++fetchMsgId;
+                
+                const bodyPromise = (async () => {
+                    const finalReq = new Request(resource, init);
+                    return {
+                        url: finalReq.url,
+                        method: finalReq.method,
+                        headers: Object.fromEntries(finalReq.headers.entries()),
+                        body: finalReq.body ? await finalReq.clone().arrayBuffer() : undefined
+                    };
+                })();
+
+                return new Promise((resolve, reject) => {
+                    workerResolvers[id] = { resolve, reject };
+                    bodyPromise.then(reqObj => {
+                        w.postMessage({ id, req: reqObj }, reqObj.body ? [reqObj.body] : undefined);
+                    }).catch(reject);
+                });
+            } else {
+                const proxyUrl = new URL(urlObj.pathname + urlObj.search, route);
+                return originalFetch(proxyUrl.href, init || (resource instanceof Request ? resource : undefined));
+            }
+        }
+        
+        const hn = urlObj.hostname;
+        if (hn.startsWith("127.") || hn === "localhost" || hn === "0.0.0.0") {
+            if (hn === "127.0.0.1" && Object.values(proxyMap).includes(`http://127.0.0.1:${urlObj.port}`)) {
+                // Allowed
+            } else {
+                throw new TypeError(`Failed to fetch: SSRF Blocked by Sandbox (${hn})`);
+            }
+        }
+
+        return originalFetch(resource, init);
+    };
+
     delete (globalThis as any).Deno;
 
     try {
@@ -1146,7 +1402,11 @@ export async function executeInsideSandbox(payload: SandboxContextPayload) {
             command: Array.isArray(payload.targetScriptPath) ? payload.targetScriptPath[0] : payload.targetScriptPath,
             argv: [payload.webrunBin, ...(payload.sandboxArgs || [])],
             dir: await storageManager.getDirectory(),
-            persisted: !payload.fallbackToTemp
+            persisted: !payload.fallbackToTemp,
+            bindings: Object.fromEntries(Object.entries(payload.bindingsMap || {}).map(([k, v]: any) => [k, 'webrun://' + v.uuid])),
+            __internalRootUrl: `file://${payload.storageRoot}/`, // For resolving dynamic imports
+            __parentPayload: payload,
+            __webrunEntryUrl: new URL(import.meta.url).href
         };
 
         if (payload.action === "test") {
@@ -1155,12 +1415,11 @@ export async function executeInsideSandbox(payload: SandboxContextPayload) {
             await executeRunPayload(payload, contextPayload, preservedDeno);
         }
     } catch (err: any) {
-        printExecutionError(rewriteDenoError(err.message));
+        printExecutionError(rewriteDenoError(err?.message || String(err)));
         await new Promise(r => setTimeout(r, 10));
         preservedDeno.exit(1);
     }
 }
-
 
 export async function buildSandboxExecutionConfig(
     invocation: any,
@@ -1174,7 +1433,10 @@ export async function buildSandboxExecutionConfig(
     importMapPath: string,
     seatbeltProfile: string,
     lockFlag: string[],
-    MAX_V8_MEM_MB: number
+    MAX_V8_MEM_MB: number,
+    bindingsMap: Record<string, { type: "process" | "module"; uuid: string; path?: string; port?: number }>,
+    ephemeralPorts: number[],
+    bindingSdksTmp: string,
 ): Promise<{ baseCmd: string; cmdOptions: any }> {
     const resolveTargetUrl = (p: string) => p.startsWith("http") ? new URL(p).href : pathToFileURL(p).href;
     let targetUrlHref: string | string[];
@@ -1200,9 +1462,10 @@ export async function buildSandboxExecutionConfig(
         evalCode: invocation.evalCode,
         sandboxArgs: invocation.sandboxArgs,
         opfsRoot: opfsTmp,
-        memoryMB: config.limits?.memoryMB
+        memoryMB: config.limits?.memoryMB,
+        bindingsMap: bindingsMap || {},
+        allowedBindings: policy.allowedBindings,
     };
-
     const bootstrapPath = resolve(runnerTmp, "webrun_bootstrap.ts");
     const bootstrapCode = `import { executeInsideSandbox } from "${new URL(import.meta.url).href}";\nconst payload = ${JSON.stringify(payloadObject)};\nawait executeInsideSandbox(payload);\n`;
     sys.writeTextFileSync(bootstrapPath, bootstrapCode);
@@ -1211,6 +1474,7 @@ export async function buildSandboxExecutionConfig(
         invocation.action === "eval" ? "run" : invocation.action,
         ...(invocation.isSelfTest ? [] : invocation.networkFlags),
         ...lockFlag,
+        "--unstable-worker-options",
         `--v8-flags=--max-old-space-size=${MAX_V8_MEM_MB}`,
         `--import-map=${importMapPath}`,
         "--no-prompt",
@@ -1218,10 +1482,25 @@ export async function buildSandboxExecutionConfig(
         "--no-check"
     ];
 
+    const denyIdx = innerDenoArgs.findIndex(a => a.startsWith("--deny-net="));
+    if (denyIdx !== -1) {
+        innerDenoArgs[denyIdx] = innerDenoArgs[denyIdx].replace("127.0.0.0/8,", "").replace(",localhost", "").replace(",0.0.0.0/8", "");
+    }
+    const globalDenyIdx = innerDenoArgs.indexOf("--deny-net");
+    if (ephemeralPorts && ephemeralPorts.length > 0) {
+        if (globalDenyIdx !== -1) {
+            innerDenoArgs.splice(globalDenyIdx, 1);
+            innerDenoArgs.push("--deny-net=10.0.0.0/8,192.168.0.0/16,172.16.0.0/12,169.254.0.0/16");
+        }
+        for (const port of ephemeralPorts) {
+            innerDenoArgs.push(`--allow-net=127.0.0.1:${port}`);
+        }
+    }
+
     if (invocation.isSelfTest) {
         innerDenoArgs.push("-A");
     } else {
-        const storageFlags = generateDenoStorageFlags(policy, isolatedTmp, runnerTmp, opfsTmp);
+        const storageFlags = generateDenoStorageFlags(policy, isolatedTmp, runnerTmp, opfsTmp, bindingSdksTmp);
         innerDenoArgs.push(...storageFlags, `--allow-env=TMP_DIR`);
     }
     innerDenoArgs.push(bootstrapPath);
@@ -1245,7 +1524,7 @@ export async function buildSandboxExecutionConfig(
 
     const envVars = { ...payloadObject.finalEnvVars };
     if (invocation.isSelfTest) {
-        envVars["WEBRUN_BIN"] = payloadObject.webrunBin;
+        if (payloadObject.webrunBin) envVars["WEBRUN_BIN"] = payloadObject.webrunBin;
         envVars["WEBRUN_IS_REPACKED_TEST"] = payloadObject.isRepackedTest ? "1" : "0";
         envVars["WEBRUN_DENO_DIR"] = dirname(sys.execPath());
     }
@@ -1285,11 +1564,11 @@ export async function spawnSandboxProcess(cwd: string, args: string[]) {
     const isolatedTmp = sys.realPathSync(sys.makeTempDirSync({ prefix: 'sandbox_tmp_' }));
     const runnerTmp = sys.realPathSync(sys.makeTempDirSync({ prefix: 'webrun_runner_' }));
     const opfsTmp = sys.realPathSync(sys.makeTempDirSync({ prefix: 'webrun_opfs_' }));
+    const bindingSdksTmp = sys.realPathSync(sys.makeTempDirSync({ prefix: 'webrun_bindings_' }));
     const { config, configDir, configFound, configPaths, importMapPaths } = resolveLocalConfiguration(cwd);
 
     const MAX_V8_MEM_MB = config.limits?.memoryMB || 512;
 
-    // Version Check
     if (args.includes("--version") || args.includes("-v")) {
         console.log(`webrun ${sys.env.get("WEBRUN_VERSION") || "dev"}`);
         sys.exit(0);
@@ -1321,7 +1600,7 @@ export async function spawnSandboxProcess(cwd: string, args: string[]) {
 
     // 2. Parse Routing State
     const invocation = parseCommandInvocation(args, config);
-    const policy = evaluateEnclavePolicy(config.permissions?.storage || {}, configDir, cwd, isolatedTmp);
+    const policy = evaluateEnclavePolicy(config.permissions?.storage || {}, config.permissions?.bindings || [], configDir, cwd, isolatedTmp);
 
     const protectedFiles: string[] = [...configPaths, ...importMapPaths];
 
@@ -1331,7 +1610,13 @@ export async function spawnSandboxProcess(cwd: string, args: string[]) {
     const selfPath = tryRealpathSync(new URL(import.meta.url).pathname);
     if (selfPath) protectedFiles.push(selfPath);
 
-    const allowedWriteEnclaves = [isolatedTmp, ...policy.allowedWritePaths, opfsTmp];
+    const allowedWriteEnclaves = [isolatedTmp, ...policy.allowedWritePaths, opfsTmp, bindingSdksTmp];
+    policy.allowedReadPaths.push(bindingSdksTmp);
+
+    for (const { dir } of findLocalConfigurations(cwd)) {
+        const canonical = tryRealpathSync(dir) || dir;
+        protectedFiles.push(canonical);
+    }
 
     for (const allowed of allowedWriteEnclaves) {
         const canonicalAllowed = tryRealpathSync(allowed) || allowed;
@@ -1358,9 +1643,75 @@ export async function spawnSandboxProcess(cwd: string, args: string[]) {
 
     const importMapPath = buildNodeSinkholeDependencies(isolatedTmp, importMapPaths);
 
+    const bindingsMap: Record<string, any> = {};
+    const ephemeralPorts: number[] = [];
+    const activeProcesses: any[] = [];
+
+    if (config.bindings) {
+        for (const [name, bindingConfig] of Object.entries(config.bindings)) {
+            const uuid = crypto.randomUUID();
+            let processConfig = bindingConfig.process;
+            let moduleConfig = bindingConfig.module;
+
+            if (processConfig) {
+                const l = (globalThis as any).Deno.listen({ port: 0, hostname: "127.0.0.1" });
+                const port = (l.addr as any).port;
+                l.close();
+                ephemeralPorts.push(port);
+
+                const env = { ...(sys.env as any).toObject() };
+                if (processConfig.portEnv) env[processConfig.portEnv] = String(port);
+
+                let allowedEnv: Record<string, string> = { "PATH": (sys.env.get("PATH") || "") + ":" + (sys.env.get("WEBRUN_DENO_BIN_DIR") || "") };
+                if (processConfig.permissions?.env) {
+                    for (const k of processConfig.permissions.env) allowedEnv[k] = sys.env.get(k) || "";
+                } else allowedEnv = env;
+                
+                if (processConfig.portEnv) allowedEnv[processConfig.portEnv] = String(port);
+                const cmdExe = processConfig.command[0] === "deno" ? sys.execPath() : processConfig.command[0];
+                const cmd = new sys.Command(cmdExe, {
+                    args: processConfig.command.slice(1),
+                    cwd: cwd,
+                    env: allowedEnv,
+                    clearEnv: true,
+                    stdin: "null",
+                    stdout: "inherit",
+                    stderr: "inherit"
+                });
+                
+                try {
+                    activeProcesses.push(cmd.spawn());
+                } catch (e: any) {
+                    printExecutionError(`Failed to spawn binding process ${name}: ${e.message}`);
+                    sys.exit(1);
+                }
+
+                bindingsMap[name] = { type: 'process', uuid, port };
+            } else if (moduleConfig) {
+                const absPath = tryRealpathSync(resolve(configDir, moduleConfig as string)) || resolve(configDir, moduleConfig as string);
+                bindingsMap[name] = { type: 'module', uuid, path: absPath };
+                policy.allowedReadPaths.push(absPath);
+                
+                const sdkPath = resolve(bindingSdksTmp, `${uuid}.js`);
+                sys.writeTextFileSync(sdkPath, `export default { async fetch(req) { const u = typeof req === 'string' ? new URL(req) : new URL(req.url); const target = "webrun://${uuid}" + u.pathname + u.search; if (typeof req === 'string') return await fetch(target); const init = { method: req.method, headers: req.headers }; if (req.body && req.method !== 'GET' && req.method !== 'HEAD') { init.body = req.body; } return await fetch(target, init); } };`);
+                
+                const importMapPayload = JSON.parse(sys.readTextFileSync(importMapPath));
+                importMapPayload.imports = importMapPayload.imports || {};
+                importMapPayload.imports[`webrun://${uuid}`] = `file://${sdkPath}`;
+                sys.writeTextFileSync(importMapPath, JSON.stringify(importMapPayload));
+            }
+        }
+    }
+    
+    globalThis.addEventListener('unload', () => {
+        for (const p of activeProcesses) {
+            try { p.kill("SIGTERM"); } catch (_) {}
+        }
+    });
+
     // 3. Compile Security Vectors
-    const { readEnclaves, writeEnclaves } = generateSeatbeltEnclaveStrings(policy, runnerTmp, opfsTmp);
-    const seatbeltProfile = generateSeatbeltProfile(cwd, readEnclaves, writeEnclaves);
+    const { readEnclaves, writeEnclaves } = generateSeatbeltEnclaveStrings(policy, runnerTmp, opfsTmp, bindingSdksTmp);
+    const seatbeltProfile = generateSeatbeltProfile(cwd, readEnclaves, writeEnclaves, ephemeralPorts);
 
     const lockFlag: string[] = [];
     const lockFilePath = resolve(projectRoot, "deno.lock");
@@ -1379,7 +1730,10 @@ export async function spawnSandboxProcess(cwd: string, args: string[]) {
         importMapPath,
         seatbeltProfile,
         lockFlag,
-        MAX_V8_MEM_MB
+        MAX_V8_MEM_MB,
+        bindingsMap,
+        ephemeralPorts,
+        bindingSdksTmp
     );
 
     const cmd = new sys.Command(baseCmd, cmdOptions);

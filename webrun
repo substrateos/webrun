@@ -151,7 +151,7 @@ if [[ "$1" == "--self-test" ]]; then
     DENO_SCRIPT="$DENO_SCRIPT.ts"
     awk '/^__DATA__/ {flag=1; next} /^__TEST_DATA__/ {flag=0} flag {print}' "$SOURCE" > "$DENO_SCRIPT"
     
-    WEBRUN_BIN="$WEBRUN_BIN" "$DENO_BIN" run -A --no-check $COVERAGE_FLAG "$DENO_SCRIPT" --self-test "$DENO_TEST_SCRIPT" "${FILTER_ARGS[@]}"
+    WEBRUN_BIN="$WEBRUN_BIN" "$DENO_BIN" run -A --no-check --unstable-worker-options $COVERAGE_FLAG "$DENO_SCRIPT" --self-test "$DENO_TEST_SCRIPT" "${FILTER_ARGS[@]}"
     EXIT_CODE=$?
     rm -f "$DENO_TEST_SCRIPT"
     rm -f "$DENO_SCRIPT"
@@ -160,7 +160,7 @@ if [[ "$1" == "--self-test" ]]; then
     fi
     exit $EXIT_CODE
   else
-    "$DENO_BIN" run -A --no-check $COVERAGE_FLAG "$SCRIPT_DIR/webrun.deno.ts" --self-test "$SCRIPT_DIR/webrun.test.ts" "${FILTER_ARGS[@]}"
+    "$DENO_BIN" run -A --no-check --unstable-worker-options $COVERAGE_FLAG "$SCRIPT_DIR/webrun.deno.ts" --self-test "$SCRIPT_DIR/webrun.test.ts" "${FILTER_ARGS[@]}"
     EXIT_CODE=$?
     if [ -n "$COVERAGE_FLAG" ]; then
       "$DENO_BIN" coverage cov_profile
@@ -175,11 +175,11 @@ if grep -q "^__DATA__" "$SOURCE"; then
   DENO_SCRIPT="$DENO_SCRIPT.ts"
   awk '/^__DATA__/ {flag=1; next} /^__TEST_DATA__/ {flag=0} flag {print}' "$SOURCE" > "$DENO_SCRIPT"
   
-  WEBRUN_BIN="$WEBRUN_BIN" "$DENO_BIN" run -A --no-check "$DENO_SCRIPT" "$@"
+  WEBRUN_BIN="$WEBRUN_BIN" "$DENO_BIN" run -A --no-check --unstable-worker-options "$DENO_SCRIPT" "$@"
   EXIT_CODE=$?
   rm -f "$DENO_SCRIPT"
   exit $EXIT_CODE
 else
-  "$DENO_BIN" run -A --no-check --quiet "$SCRIPT_DIR/webrun.deno.ts" "$@"
+  "$DENO_BIN" run -A --no-check --quiet --unstable-worker-options "$SCRIPT_DIR/webrun.deno.ts" "$@"
   exit $?
 fi

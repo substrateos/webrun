@@ -111,6 +111,26 @@ export default async function(ctx) {
 }
 ```
 
+### Spawning Sandboxed Sub-Workers
+You can programmatically spawn ephemeral, isolated sub-workers using the `ctx.webrun` API. Sub-workers inherit the exact same security context, memory limits, and timeout constraints as the parent script.
+
+```javascript
+export default async function(ctx) {
+  // Spawn a child script 
+  const result = await ctx.webrun(["src/child.js", "--child-flag", "--", "positional-arg"]);
+  
+  // Or evaluate code inline
+  const evalResult = await ctx.webrun(["--eval", "console.log('Isolated evaluation!');"]);
+
+  if (result.exitCode === 0) {
+    console.log("Child output:", result.stdout);
+  } else {
+    console.error("Child error:", result.stderr);
+  }
+}
+```
+
+
 ### File System Access
 Scripts cannot use standard `fs` or `Deno` globals to interact with the file system. You must use `ctx.dir` (to access the host directory mapped by the configuration) or `navigator.storage` (for temporary sandbox-isolated OPFS storage). If you try to read or write a file outside of the allowed directory, the sandbox will block the operation.
 
