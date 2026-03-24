@@ -848,6 +848,28 @@ export async function executeInsideSandbox(payload: SandboxContextPayload) {
     const testFn = Deno.test;
     const getMemoryUsage = Deno.memoryUsage.bind(Deno);
 
+    const rewriteDenoError = (msg: string): string => {
+        if (!msg) return msg;
+        if (msg.includes("run again with the --allow-")) {
+            return msg.replace(/, run again with the --allow-[a-z-]+ flag/g, "")
+                      + ".\n  Hint: Update the 'permissions' object in your webrun.json to allow this operation.";
+        }
+        return msg;
+    };
+
+    globalThis.addEventListener('unhandledrejection', (e: any) => {
+        if (e.reason && e.reason.name === "WebrunSkipError") return;
+        e.preventDefault();
+        printExecutionError(rewriteDenoError(e.reason?.message || String(e.reason)));
+        exitFn(1);
+    });
+
+    globalThis.addEventListener('error', (e: any) => {
+        e.preventDefault();
+        printExecutionError(rewriteDenoError(e.error?.message || String(e.error)));
+        exitFn(1);
+    });
+
     if (payload.memoryMB) {
         const MAX_RSS_MB = payload.memoryMB;
         const MAX_RSS_BYTES = MAX_RSS_MB * 1024 * 1024;
@@ -944,7 +966,7 @@ export async function executeInsideSandbox(payload: SandboxContextPayload) {
             exitFn(0);
         }
     } catch (err: any) {
-        printExecutionError(err.message);
+        printExecutionError(rewriteDenoError(err.message));
         // Allow IPC pipe to flush stderr cleanly before exiting
         await new Promise(r => setTimeout(r, 10));
         exitFn(1);
