@@ -46,13 +46,15 @@ export function findLocalConfigurations(currentDir: string): FoundConfig[] {
         }
 
         if (foundConfig) {
+            const hasExplicitBindingsWhitelist = foundConfig.permissions && foundConfig.permissions.bindings !== undefined;
+            
             if (!foundConfig.permissions) foundConfig.permissions = { storage: {}, network: [], env: [], bindings: [] };
             if (!foundConfig.permissions.storage) foundConfig.permissions.storage = {};
             if (!foundConfig.permissions.network) foundConfig.permissions.network = [];
             if (!foundConfig.permissions.env) foundConfig.permissions.env = [];
             if (!foundConfig.permissions.bindings) foundConfig.permissions.bindings = [];
 
-            if (foundConfig.bindings) {
+            if (foundConfig.bindings && !hasExplicitBindingsWhitelist) {
                 for (const key of Object.keys(foundConfig.bindings)) {
                     if (!foundConfig.permissions.bindings.includes(key)) {
                         foundConfig.permissions.bindings.push(key);
@@ -183,11 +185,20 @@ export function mergeConfigurations(allConfigs: FoundConfig[], defaultDir: strin
                 if (!finalConfig.bindings) finalConfig.bindings = {};
                 const parsedBindings = JSON.parse(JSON.stringify(cfg.bindings));
                 for (const v of Object.values(parsedBindings) as any[]) {
-                    if (v.module && !v.module.startsWith("/")) {
+                    if (v.module && typeof v.module === "string") {
                         v.module = resolve(dir, v.module);
                     }
                 }
                 Object.assign(finalConfig.bindings, parsedBindings);
+            }
+        }
+
+        if (finalConfig.bindings && finalConfig.permissions?.bindings) {
+            const allowed = finalConfig.permissions.bindings;
+            for (const key of Object.keys(finalConfig.bindings)) {
+                if (!allowed.includes(key)) {
+                    delete finalConfig.bindings[key];
+                }
             }
         }
 

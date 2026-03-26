@@ -21,3 +21,4 @@ export * from "./tests/programmatic_api.test.ts";
 export * from "./tests/bundling.test.ts";
 export * from "./tests/service_bindings.test.ts";
 export * from "./tests/process_bindings.test.ts";
+export * from "./tests/webrun_config.test.ts";
