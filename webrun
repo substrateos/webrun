@@ -117,7 +117,21 @@ if [[ "$1" == "--self-unbundle" ]]; then
         const u = new URL(s);
         outPath = 'vendor/' + u.hostname + u.pathname;
       } else if (s.startsWith('file://')) {
-        outPath = new URL(s).pathname.split('/').pop();
+        const p = new URL(s).pathname;
+        const cwd = Deno.cwd();
+        if (p.startsWith(cwd)) {
+          outPath = p.substring(cwd.length + 1);
+        } else {
+          // If it's outside the workspace, attempt to find its relative root.
+          // For now, if we detect 'webrun.test.ts' or 'webrun.deno.ts' we can try to guess.
+          const parts = p.split('/');
+          const testsIdx = parts.lastIndexOf('tests');
+          if (testsIdx !== -1) {
+            outPath = parts.slice(testsIdx).join('/');
+          } else {
+            outPath = parts.pop();
+          }
+        }
       } else {
         outPath = s;
       }
