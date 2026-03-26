@@ -8,12 +8,19 @@ This guide explains `webrun` repository structure, dependency management, testin
 
 ```text
 .
-├── webrun                 # Main executable. Downloads the Deno binary and acts as the bundler/unbundler interface.
-├── webrun.deno.ts         # Core sandbox implementation (FileSystem endpoints & OS constraints).
-├── webrun.test.ts         # Built-in test suite for isolation and bundling checks.
-├── deno.json              # Enables dependency vendoring ("vendor": true) and import maps.
-├── deno.lock              # Ensures cryptographically tied dependency resolution.
-└── vendor/                # Local cache of remote modules. Allows complete offline execution.
+├── webrun                 # Self-bootstrapping executable wrapper
+├── webrun.ts              # Main entrypoint
+├── webrun.test.ts         # Built-in test suite
+├── src/                   # Implementation
+│   ├── config.ts          # Policy parsing and environment configuration
+│   ├── execution.ts       # Sandbox lifecycle and security orchestration
+│   ├── fs.ts              # Virtualized filesystem (OPFS) abstractions
+│   ├── sys.ts             # Host OS and platform interop layer
+│   └── types.ts           # Shared domain models and interfaces
+├── test/                  # Test suite
+├── deno.json              # Enables dependency vendoring ("vendor": true) and import maps
+├── deno.lock              # Ensures cryptographically tied dependency resolution
+└── vendor/                # Local cache of remote modules. Allows complete offline execution
 ```
 
 ## Updating Dependencies

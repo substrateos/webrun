@@ -123,7 +123,7 @@ if [[ "$1" == "--self-unbundle" ]]; then
           outPath = p.substring(cwd.length + 1);
         } else {
           // If it's outside the workspace, attempt to find its relative root.
-          // For now, if we detect 'webrun.test.ts' or 'webrun.deno.ts' we can try to guess.
+          // For now, if we detect 'webrun.test.ts' or 'webrun.ts' we can try to guess.
           const parts = p.split('/');
           const testsIdx = parts.lastIndexOf('tests');
           if (testsIdx !== -1) {
@@ -152,7 +152,7 @@ if [[ "$1" == "--self-bundle" ]]; then
     exit 1
   fi
   SRC_DIR="$SCRIPT_DIR"
-  for file in "webrun" "webrun.deno.ts" "webrun.test.ts" "README.md" "LICENSE" "deno.json" "deno.lock"; do
+  for file in "webrun" "webrun.ts" "webrun.test.ts" "README.md" "LICENSE" "deno.json" "deno.lock"; do
     if [ ! -f "$SRC_DIR/$file" ]; then
       echo "Error: Missing required file $SRC_DIR/$file for bundling." >&2
       exit 1
@@ -160,7 +160,7 @@ if [[ "$1" == "--self-bundle" ]]; then
   done
   awk '/^__DATA__/ {exit} {print}' "$SRC_DIR/webrun"
   echo "__DATA__"
-  "$DENO_BIN" bundle --config "$SRC_DIR/deno.json" --external=webrun/ctx --sourcemap=inline "$SRC_DIR/webrun.deno.ts" 2>/dev/null || cat "$SRC_DIR/webrun.deno.ts"
+  "$DENO_BIN" bundle --config "$SRC_DIR/deno.json" --external=webrun/ctx --sourcemap=inline "$SRC_DIR/webrun.ts" 2>/dev/null || cat "$SRC_DIR/webrun.ts"
   echo "__TEST_DATA__"
   "$DENO_BIN" bundle --config "$SRC_DIR/deno.json" --external=webrun/ctx --sourcemap=inline "$SRC_DIR/webrun.test.ts" 2>/dev/null || cat "$SRC_DIR/webrun.test.ts"
   echo "__README_DATA__"
@@ -181,7 +181,7 @@ if [[ "$1" == "--self-vendor" ]]; then
   fi
   SRC_DIR="$SCRIPT_DIR"
   echo "Vendoring dependencies based on deno.json..."
-  "$DENO_BIN" cache --config "$SRC_DIR/deno.json" "$SRC_DIR/webrun.deno.ts" "$SRC_DIR/webrun.test.ts"
+  "$DENO_BIN" cache --config "$SRC_DIR/deno.json" "$SRC_DIR/webrun.ts" "$SRC_DIR/webrun.test.ts"
   exit $?
 fi
 
@@ -223,7 +223,7 @@ if [[ "$1" == "--self-test" ]]; then
     fi
     exit $EXIT_CODE
   else
-    "$DENO_BIN" run -A --config "$SCRIPT_DIR/deno.json" --no-check --unstable-worker-options $COVERAGE_FLAG "$SCRIPT_DIR/webrun.deno.ts" --self-test "$SCRIPT_DIR/webrun.test.ts" "${FILTER_ARGS[@]}"
+    "$DENO_BIN" run -A --config "$SCRIPT_DIR/deno.json" --no-check --unstable-worker-options $COVERAGE_FLAG "$SCRIPT_DIR/webrun.ts" --self-test "$SCRIPT_DIR/webrun.test.ts" "${FILTER_ARGS[@]}"
     EXIT_CODE=$?
     if [ -n "$COVERAGE_FLAG" ]; then
       "$DENO_BIN" coverage cov_profile
@@ -243,6 +243,6 @@ if grep -q "^__DATA__" "$SOURCE"; then
   rm -f "$DENO_SCRIPT"
   exit $EXIT_CODE
 else
-  "$DENO_BIN" run -A --config "$SCRIPT_DIR/deno.json" --no-check --quiet --unstable-worker-options "$SCRIPT_DIR/webrun.deno.ts" "$@"
+  "$DENO_BIN" run -A --config "$SCRIPT_DIR/deno.json" --no-check --quiet --unstable-worker-options "$SCRIPT_DIR/webrun.ts" "$@"
   exit $?
 fi
