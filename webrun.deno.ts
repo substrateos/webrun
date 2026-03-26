@@ -116,20 +116,22 @@ export interface WebrunConfig {
     importMap?: string;
 }
 export interface CommandInvocation {
-    action: "run" | "test" | "eval";
+    action: "run" | "test" | "eval" | "check-only";
     isSelfTest?: boolean;
     targetScriptPath: string | string[];
     evalCode?: string;
     sandboxArgs: string[];
     injectedArgsObj: Record<string, any>;
     networkFlags: string[];
+    isNoCheck?: boolean;
 }
 
 export interface SandboxContextPayload {
-    action: "run" | "test" | "eval";
+    action: "run" | "test" | "eval" | "check-only";
     isSelfTest?: boolean;
     webrunBin?: string;
     isRepackedTest?: boolean;
+    isSelfCheck?: boolean;
     storageRoot: string;
     fallbackToTemp: boolean;
     injectedArgsObj: Record<string, any>;
@@ -151,7 +153,10 @@ export interface SandboxContextPayload {
 export interface ParsedArgs {
     isTest: boolean;
     isSelfTest: boolean;
+    isSelfCheck: boolean;
     isEval: boolean;
+    isCheckOnly: boolean;
+    isNoCheck: boolean;
     evalCode: string;
     targetScriptPath: string | string[];
     sandboxArgs: string[];
@@ -162,7 +167,10 @@ export function parseRawArguments(args: string[]): ParsedArgs {
     const rawArgs = [...args];
     let isTest = false;
     let isSelfTest = false;
+    let isSelfCheck = false;
     let isEval = false;
+    let isCheckOnly = false;
+    let isNoCheck = false;
     let evalCode = "";
 
     let targetScriptPath: string | string[] = "";
@@ -204,7 +212,19 @@ export function parseRawArguments(args: string[]): ParsedArgs {
         rawArgs.splice(testIdx, 1);
     }
 
-    if (rawArgs.length === 0 && !isTest && !isEval) {
+    const checkIdx = rawArgs.indexOf("--check-only");
+    if (checkIdx !== -1) {
+        isCheckOnly = true;
+        rawArgs.splice(checkIdx, 1);
+    }
+
+    const noCheckIdx = rawArgs.indexOf("--no-check");
+    if (noCheckIdx !== -1) {
+        isNoCheck = true;
+        rawArgs.splice(noCheckIdx, 1);
+    }
+
+    if (rawArgs.length === 0 && !isTest && !isEval && !isCheckOnly && !isSelfCheck && !isSelfTest) {
         printUsageError("Usage: webrun [options] <script.ts> [args...]\\nRun with --help for documentation.");
         sys.exit(1);
     }
@@ -212,7 +232,7 @@ export function parseRawArguments(args: string[]): ParsedArgs {
     for (let i = 0; i < rawArgs.length; i++) {
         const arg = rawArgs[i];
         if (onlyPositional) {
-            if (isTest && !isSelfTest) {
+            if ((isTest || isCheckOnly) && !isSelfTest) {
                 testPaths.push(arg);
             } else if (isSelfTest) {
                 printSecurityFatal("The --self-test execution mode strictly forbids external file paths.");
@@ -240,14 +260,14 @@ export function parseRawArguments(args: string[]): ParsedArgs {
             }
             injectedArgsObj[key] = val;
         } else {
-            if (!isTest) {
+            if (!(isTest || isCheckOnly)) {
                 if (!scriptFound) {
                     targetScriptPath = arg;
                     scriptFound = true;
                 } else {
                     injectedArgsObj["--"].push(arg);
                 }
-            } else if (isTest && !isSelfTest) {
+            } else if ((isTest || isCheckOnly) && !isSelfTest) {
                 testPaths.push(arg);
                 scriptFound = true;
             } else if (isSelfTest) {
@@ -257,13 +277,13 @@ export function parseRawArguments(args: string[]): ParsedArgs {
         }
     }
 
-    if (isTest) {
+    if (isTest || isCheckOnly) {
         if (testPaths.length === 0) {
-            printUsageError("Usage: webrun --test [options] <script1.ts> ...\\nRun with --help for documentation.");
+            printUsageError("Usage: webrun [options] <script1.ts> ...\\nRun with --help for documentation.");
             sys.exit(1);
         }
         targetScriptPath = testPaths;
-    } else if (!isEval) {
+    } else if (!isEval && !isSelfTest && !isSelfCheck) {
         if (!scriptFound) {
             printUsageError("Usage: webrun [options] <script.ts> [args...]\\nRun with --help for documentation.");
             sys.exit(1);
@@ -273,7 +293,10 @@ export function parseRawArguments(args: string[]): ParsedArgs {
     return {
         isTest,
         isSelfTest,
+        isSelfCheck,
         isEval,
+        isCheckOnly,
+        isNoCheck,
         evalCode,
         targetScriptPath: targetScriptPath!,
         sandboxArgs: rawArgs,
@@ -281,9 +304,10 @@ export function parseRawArguments(args: string[]): ParsedArgs {
     };
 }
 
-export function resolveExecutionMode(parsed: ParsedArgs): "run" | "test" | "eval" {
+export function resolveExecutionMode(parsed: ParsedArgs): "run" | "test" | "eval" | "check-only" {
     if (parsed.isEval) return "eval";
     if (parsed.isTest) return "test";
+    if (parsed.isCheckOnly) return "check-only";
     return "run";
 }
 
@@ -308,6 +332,7 @@ export function parseCommandInvocation(args: string[], config: WebrunConfig): Co
         action,
         isSelfTest: parsed.isSelfTest,
         targetScriptPath: parsed.targetScriptPath,
+        isNoCheck: parsed.isNoCheck,
         evalCode: parsed.evalCode,
         sandboxArgs: parsed.sandboxArgs,
         injectedArgsObj: parsed.injectedArgsObj,
@@ -529,7 +554,7 @@ export async function webrun(spawnArgs, options = {}) {
                         childPayload.injectedArgsObj = parsed.injectedArgsObj;
                         
                         // Construct targetUrlHref natively from parsed inputs
-                        childPayload.action = parsed.isEval ? "eval" : (parsed.isTest ? "test" : "run");
+                        childPayload.action = parsed.isEval ? "eval" : (parsed.isTest ? "test" : (parsed.isCheckOnly ? "check-only" : "run"));
                         if (parsed.isEval) {
                             childPayload.targetScriptPath = "[eval]";
                             childPayload.targetUrlHref = "data:application/typescript;charset=utf-8," + encodeURIComponent(parsed.evalCode);
@@ -1470,24 +1495,33 @@ export async function buildSandboxExecutionConfig(
     const bootstrapCode = `import { executeInsideSandbox } from "${new URL(import.meta.url).href}";\nconst payload = ${JSON.stringify(payloadObject)};\nawait executeInsideSandbox(payload);\n`;
     sys.writeTextFileSync(bootstrapPath, bootstrapCode);
 
+    const isCheckOnly = invocation.action === "check-only";
+
     const innerDenoArgs = [
-        invocation.action === "eval" ? "run" : invocation.action,
-        ...(invocation.isSelfTest ? [] : invocation.networkFlags),
-        ...lockFlag,
-        "--unstable-worker-options",
-        `--v8-flags=--max-old-space-size=${MAX_V8_MEM_MB}`,
-        `--import-map=${importMapPath}`,
-        "--no-prompt",
-        "--no-npm",
-        "--no-check"
+        invocation.action === "eval" ? "run" : (isCheckOnly ? "check" : invocation.action),
+        ...(invocation.isSelfTest || isCheckOnly ? [] : invocation.networkFlags),
+        ...lockFlag
     ];
+
+    if (!isCheckOnly) {
+        innerDenoArgs.push("--unstable-worker-options");
+    }
+
+    innerDenoArgs.push(
+        `--v8-flags=--max-old-space-size=${MAX_V8_MEM_MB}`,
+        `--import-map=${importMapPath}`
+    );
+
+    if (!isCheckOnly) {
+        innerDenoArgs.push("--no-prompt", "--no-npm", "--no-check");
+    }
 
     const denyIdx = innerDenoArgs.findIndex(a => a.startsWith("--deny-net="));
     if (denyIdx !== -1) {
-        innerDenoArgs[denyIdx] = innerDenoArgs[denyIdx].replace("127.0.0.0/8,", "").replace(",localhost", "").replace(",0.0.0.0/8", "");
+        innerDenoArgs.splice(denyIdx, 1, innerDenoArgs[denyIdx].replace("127.0.0.0/8,", "").replace(",localhost", "").replace(",0.0.0.0/8", ""));
     }
     const globalDenyIdx = innerDenoArgs.indexOf("--deny-net");
-    if (ephemeralPorts && ephemeralPorts.length > 0) {
+    if (ephemeralPorts && ephemeralPorts.length > 0 && !isCheckOnly) {
         if (globalDenyIdx !== -1) {
             innerDenoArgs.splice(globalDenyIdx, 1);
             innerDenoArgs.push("--deny-net=10.0.0.0/8,192.168.0.0/16,172.16.0.0/12,169.254.0.0/16");
@@ -1498,12 +1532,21 @@ export async function buildSandboxExecutionConfig(
     }
 
     if (invocation.isSelfTest) {
-        innerDenoArgs.push("-A");
-    } else {
+        if (!isCheckOnly) innerDenoArgs.push("-A");
+    } else if (!isCheckOnly) {
         const storageFlags = generateDenoStorageFlags(policy, isolatedTmp, runnerTmp, opfsTmp, bindingSdksTmp);
         innerDenoArgs.push(...storageFlags, `--allow-env=TMP_DIR`);
     }
-    innerDenoArgs.push(bootstrapPath);
+
+    if (isCheckOnly) {
+        if (Array.isArray(invocation.targetScriptPath)) {
+            innerDenoArgs.push(...invocation.targetScriptPath);
+        } else {
+            innerDenoArgs.push(invocation.targetScriptPath as string);
+        }
+    } else {
+        innerDenoArgs.push(bootstrapPath);
+    }
 
     const isMac = sys.build.os === "darwin" && !invocation.isSelfTest;
     const baseCmd = isMac ? "sandbox-exec" : sys.execPath();
@@ -1572,6 +1615,18 @@ export async function spawnSandboxProcess(cwd: string, args: string[]) {
     if (args.includes("--version") || args.includes("-v")) {
         console.log(`webrun ${sys.env.get("WEBRUN_VERSION") || "dev"}`);
         sys.exit(0);
+    }
+
+    if (args.includes("--self-check") || args.includes("--self-test")) {
+        const checkCmd = new sys.Command(sys.execPath(), {
+            args: ["check", new URL(import.meta.url).pathname],
+            stdout: "inherit",
+            stderr: "inherit"
+        });
+        const status = await checkCmd.output();
+        if (status.code !== 0 || !args.includes("--self-test")) {
+            sys.exit(status.code);
+        }
     }
 
     // Help Command Evaluation

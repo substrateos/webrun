@@ -1432,6 +1432,57 @@ export async function testCLI(t: any) {
             expectCode: 0,
             expectStdout: "RUNNING SUITE A",
             expectStderr: ""
+        },
+        {
+            name: "--check-only catches TS type errors and does not execute",
+            args: ["--check-only", "invalid_types.ts"],
+            files: {
+                "invalid_types.ts": `
+                    const x: number = "not a number";
+                    throw new Error("SHOULD_NOT_RUN_TS");
+                `
+            },
+            expectCode: 1,
+            expectStderr: ["Type 'string' is not assignable to type 'number'"]
+        },
+        {
+            name: "--check-only catches JS syntax errors and does not execute",
+            args: ["--check-only", "invalid_syntax.js"],
+            files: {
+                "invalid_syntax.js": `
+                    const x = ;
+                    throw new Error("SHOULD_NOT_RUN_JS");
+                `
+            },
+            expectCode: 1
+        },
+        {
+            name: "--check-only accepts multiple files and does not execute them",
+            args: ["--check-only", "valid1.ts", "valid2.js"],
+            files: {
+                "valid1.ts": `
+                    export const x: number = 42;
+                    throw new Error("SHOULD_NOT_RUN_VALID_1");
+                `,
+                "valid2.js": `
+                    export const y = 42;
+                    throw new Error("SHOULD_NOT_RUN_VALID_2");
+                `
+            },
+            expectCode: 0
+        },
+        {
+            name: "Default execution ignores TS type errors natively",
+            args: ["run_invalid_types_bypass.ts"],
+            files: {
+                "run_invalid_types_bypass.ts": `
+                    const x: number = "not a number";
+                    console.log("BYPASS_SUCCESS_" + typeof x);
+                `
+            },
+            expectCode: 0,
+            expectStdout: "BYPASS_SUCCESS_string",
+            expectStderr: ""
         }
     ]);
 }
