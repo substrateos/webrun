@@ -94,17 +94,51 @@ if [[ "$1" == "--self-unbundle" ]]; then
   mkdir -p "$DEST_DIR"
   awk '/^__DATA__/ {exit} {print}' "$SOURCE" > "$DEST_DIR/webrun"
   chmod +x "$DEST_DIR/webrun"
-  awk '/^__DATA__/ {flag=1; next} /^__TEST_DATA__/ {flag=0} flag {print}' "$SOURCE" > "$DEST_DIR/webrun.deno.ts"
-  awk '/^__TEST_DATA__/ {flag=1; next} /^__README_DATA__/ {flag=0} flag {print}' "$SOURCE" > "$DEST_DIR/webrun.test.ts"
   awk '/^__README_DATA__/ {flag=1; next} /^__LICENSE_DATA__/ {flag=0} flag {print}' "$SOURCE" > "$DEST_DIR/README.md"
-  awk '/^__LICENSE_DATA__/ {flag=1; next} flag {print}' "$SOURCE" > "$DEST_DIR/LICENSE"
+  awk '/^__LICENSE_DATA__/ {flag=1; next} /^__DENO_JSON_DATA__/ {flag=0} flag {print}' "$SOURCE" > "$DEST_DIR/LICENSE"
+  awk '/^__DENO_JSON_DATA__/ {flag=1; next} /^__DENO_LOCK_DATA__/ {flag=0} flag {print}' "$SOURCE" > "$DEST_DIR/deno.json"
+  awk '/^__DENO_LOCK_DATA__/ {flag=1; next} flag {print}' "$SOURCE" > "$DEST_DIR/deno.lock"
+
+  "$DENO_BIN" run -A - "$SOURCE" "$DEST_DIR" << 'EOF'
+  const sourceFile = Deno.args[0];
+  const destDir = Deno.args[1];
+  const b = Deno.readTextFileSync(sourceFile);
+  const re = /sourceMappingURL=data:application\/json;base64,([a-zA-Z0-9+/=]+)/g;
+  let m;
+  while((m = re.exec(b)) !== null) {
+    const sm = JSON.parse(atob(m[1]));
+    if (!sm.sources) continue;
+    for (let i = 0; i < sm.sources.length; i++) {
+      const s = sm.sources[i];
+      const c = sm.sourcesContent ? sm.sourcesContent[i] : null;
+      if(!c) continue;
+      let outPath;
+      if (s.startsWith('http://') || s.startsWith('https://')) {
+        const u = new URL(s);
+        outPath = 'vendor/' + u.hostname + u.pathname;
+      } else if (s.startsWith('file://')) {
+        outPath = new URL(s).pathname.split('/').pop();
+      } else {
+        outPath = s;
+      }
+      const full = destDir + '/' + outPath;
+      const dir = full.substring(0, full.lastIndexOf('/'));
+      Deno.mkdirSync(dir, {recursive:true});
+      Deno.writeTextFileSync(full, c);
+    }
+  }
+EOF
   echo "Successfully unbundled webrun source to $DEST_DIR"
   exit 0
 fi
 
 if [[ "$1" == "--self-bundle" ]]; then
+  if grep -q "^__DATA__" "$SOURCE"; then
+    echo "Error: --self-bundle can only be run from the unbundled source repository." >&2
+    exit 1
+  fi
   SRC_DIR="$SCRIPT_DIR"
-  for file in "webrun" "webrun.deno.ts" "webrun.test.ts" "README.md" "LICENSE"; do
+  for file in "webrun" "webrun.deno.ts" "webrun.test.ts" "README.md" "LICENSE" "deno.json" "deno.lock"; do
     if [ ! -f "$SRC_DIR/$file" ]; then
       echo "Error: Missing required file $SRC_DIR/$file for bundling." >&2
       exit 1
@@ -112,14 +146,29 @@ if [[ "$1" == "--self-bundle" ]]; then
   done
   awk '/^__DATA__/ {exit} {print}' "$SRC_DIR/webrun"
   echo "__DATA__"
-  cat "$SRC_DIR/webrun.deno.ts"
+  "$DENO_BIN" bundle --config "$SRC_DIR/deno.json" --external=webrun/ctx --sourcemap=inline "$SRC_DIR/webrun.deno.ts" 2>/dev/null || cat "$SRC_DIR/webrun.deno.ts"
   echo "__TEST_DATA__"
-  cat "$SRC_DIR/webrun.test.ts"
+  "$DENO_BIN" bundle --config "$SRC_DIR/deno.json" --external=webrun/ctx --sourcemap=inline "$SRC_DIR/webrun.test.ts" 2>/dev/null || cat "$SRC_DIR/webrun.test.ts"
   echo "__README_DATA__"
   cat "$SRC_DIR/README.md"
   echo "__LICENSE_DATA__"
   cat "$SRC_DIR/LICENSE"
+  echo "__DENO_JSON_DATA__"
+  cat "$SRC_DIR/deno.json"
+  echo "__DENO_LOCK_DATA__"
+  cat "$SRC_DIR/deno.lock"
   exit 0
+fi
+
+if [[ "$1" == "--self-vendor" ]]; then
+  if grep -q "^__DATA__" "$SOURCE"; then
+    echo "Error: --self-vendor can only be run from the unbundled source repository." >&2
+    exit 1
+  fi
+  SRC_DIR="$SCRIPT_DIR"
+  echo "Vendoring dependencies based on deno.json..."
+  "$DENO_BIN" cache --config "$SRC_DIR/deno.json" "$SRC_DIR/webrun.deno.ts" "$SRC_DIR/webrun.test.ts"
+  exit $?
 fi
 
 if [[ "$1" == "--self-test" ]]; then
@@ -141,15 +190,15 @@ if [[ "$1" == "--self-test" ]]; then
 
   if grep -q "^__TEST_DATA__" "$SOURCE"; then
     DENO_TEST_SCRIPT=$(mktemp)
-    mv "$DENO_TEST_SCRIPT" "$DENO_TEST_SCRIPT.ts"
-    DENO_TEST_SCRIPT="$DENO_TEST_SCRIPT.ts"
-    awk '/^__TEST_DATA__/ {flag=1; next} /^__README_DATA__/ {flag=0} flag {print}' "$SOURCE" > "$DENO_TEST_SCRIPT"
+    mv "$DENO_TEST_SCRIPT" "$DENO_TEST_SCRIPT.js"
+    DENO_TEST_SCRIPT="$DENO_TEST_SCRIPT.js"
+    awk '/^__TEST_DATA__/ {flag=1; next} /^__README_DATA__/ {flag=0} flag { if ($0 !~ /^\/\/# sourceMappingURL=/) print }' "$SOURCE" > "$DENO_TEST_SCRIPT"
 
     # Extract the main deno script as well
     DENO_SCRIPT=$(mktemp)
-    mv "$DENO_SCRIPT" "$DENO_SCRIPT.ts"
-    DENO_SCRIPT="$DENO_SCRIPT.ts"
-    awk '/^__DATA__/ {flag=1; next} /^__TEST_DATA__/ {flag=0} flag {print}' "$SOURCE" > "$DENO_SCRIPT"
+    mv "$DENO_SCRIPT" "$DENO_SCRIPT.js"
+    DENO_SCRIPT="$DENO_SCRIPT.js"
+    awk '/^__DATA__/ {flag=1; next} /^__TEST_DATA__/ {flag=0} flag { if ($0 !~ /^\/\/# sourceMappingURL=/) print }' "$SOURCE" > "$DENO_SCRIPT"
     
     WEBRUN_BIN="$WEBRUN_BIN" "$DENO_BIN" run -A --no-check --unstable-worker-options $COVERAGE_FLAG "$DENO_SCRIPT" --self-test "$DENO_TEST_SCRIPT" "${FILTER_ARGS[@]}"
     EXIT_CODE=$?
@@ -160,7 +209,7 @@ if [[ "$1" == "--self-test" ]]; then
     fi
     exit $EXIT_CODE
   else
-    "$DENO_BIN" run -A --no-check --unstable-worker-options $COVERAGE_FLAG "$SCRIPT_DIR/webrun.deno.ts" --self-test "$SCRIPT_DIR/webrun.test.ts" "${FILTER_ARGS[@]}"
+    "$DENO_BIN" run -A --config "$SCRIPT_DIR/deno.json" --no-check --unstable-worker-options $COVERAGE_FLAG "$SCRIPT_DIR/webrun.deno.ts" --self-test "$SCRIPT_DIR/webrun.test.ts" "${FILTER_ARGS[@]}"
     EXIT_CODE=$?
     if [ -n "$COVERAGE_FLAG" ]; then
       "$DENO_BIN" coverage cov_profile
@@ -171,15 +220,15 @@ fi
 
 if grep -q "^__DATA__" "$SOURCE"; then
   DENO_SCRIPT=$(mktemp)
-  mv "$DENO_SCRIPT" "$DENO_SCRIPT.ts"
-  DENO_SCRIPT="$DENO_SCRIPT.ts"
-  awk '/^__DATA__/ {flag=1; next} /^__TEST_DATA__/ {flag=0} flag {print}' "$SOURCE" > "$DENO_SCRIPT"
+  mv "$DENO_SCRIPT" "$DENO_SCRIPT.js"
+  DENO_SCRIPT="$DENO_SCRIPT.js"
+  awk '/^__DATA__/ {flag=1; next} /^__TEST_DATA__/ {flag=0} flag { if ($0 !~ /^\/\/# sourceMappingURL=/) print }' "$SOURCE" > "$DENO_SCRIPT"
   
   WEBRUN_BIN="$WEBRUN_BIN" "$DENO_BIN" run -A --no-check --unstable-worker-options "$DENO_SCRIPT" "$@"
   EXIT_CODE=$?
   rm -f "$DENO_SCRIPT"
   exit $EXIT_CODE
 else
-  "$DENO_BIN" run -A --no-check --quiet --unstable-worker-options "$SCRIPT_DIR/webrun.deno.ts" "$@"
+  "$DENO_BIN" run -A --config "$SCRIPT_DIR/deno.json" --no-check --quiet --unstable-worker-options "$SCRIPT_DIR/webrun.deno.ts" "$@"
   exit $?
 fi

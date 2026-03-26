@@ -120,6 +120,10 @@ async function runTests(t: any, tcs: TestCase[]) {
     }
 }
 
+// NOTE: We use absolute URLs for dependencies instead of deno.json import maps
+// because this module is dynamically evaluated inside restricted Deno Workers.
+// Worker instances do not automatically inherit the host's import map, and
+// bare specifiers would fail to resolve without 'deno bundle'.
 import { join, dirname } from "https://deno.land/std@0.224.0/path/mod.ts";
 import { assertEquals, assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.ts";
 

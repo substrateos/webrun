@@ -1,3 +1,7 @@
+// NOTE: We use absolute URLs for dependencies instead of deno.json import maps
+// because this module is dynamically evaluated inside restricted Deno Workers.
+// Worker instances do not automatically inherit the host's import map, and
+// bare specifiers would fail to resolve without 'deno bundle'.
 import { resolve, dirname, extname, join, globToRegExp, normalize, isAbsolute } from "https://deno.land/std@0.224.0/path/mod.ts";
 import { pathToFileURL } from "node:url";
 
@@ -396,8 +400,9 @@ export function evaluateEnclavePolicy(configDirs: Record<string, { access: "read
 }
 
 export function generateDenoStorageFlags(policy: EnclavePolicy, isolatedTmp: string, runnerTmp: string, opfsTmp: string, bindingSdksTmp: string): string[] {
-    const selfPath = tryRealpathSync(new URL(import.meta.url).pathname) || new URL(import.meta.url).pathname;
-    const r = [isolatedTmp, ...policy.allowedReadPaths, runnerTmp, opfsTmp, selfPath, bindingSdksTmp];
+    const unresolvedPath = new URL(import.meta.url).pathname;
+    const selfPath = tryRealpathSync(unresolvedPath) || unresolvedPath;
+    const r = [isolatedTmp, ...policy.allowedReadPaths, runnerTmp, opfsTmp, selfPath, unresolvedPath, bindingSdksTmp];
     const w = [isolatedTmp, ...policy.allowedWritePaths, opfsTmp];
     return [
         `--allow-read=${r.join(",")}`,
