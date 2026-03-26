@@ -2,9 +2,68 @@
 
 `webrun` is a command-line tool for safely running untrusted JavaScript and TypeScript code.
 
+> [!WARNING]
+> `webrun` is currently **experimental**. While it utilizes strict OS-level constraints and runtime sandboxing, you should vet it heavily for your specific use-case before depending on it in a production environment.
+
 By default, scripts running inside `webrun` are isolated in a sandbox. They cannot access the default network, read or write files on your computer, or view your environment variables. 
 
 To grant a script permission to access specific folders, network domains, or environment variables, you must create a `webrun.json` configuration file (or a `"webrun"` object in your `package.json`) in the script's directory or any parent directory.
+
+## INSTALLATION
+
+Download and commit the `webrun` executable directly into your repository. The same executable works on both macOS and Linux:
+
+```bash
+curl -fsSL https://github.com/substrateos/webrun/releases/latest/download/webrun-dist > ./webrun
+chmod +x ./webrun
+
+# After inspecting the downloaded file, run the built-in test suite:
+./webrun --self-test
+```
+
+## QUICKSTART
+
+To run scripts safely, you must define sandbox boundaries in a `webrun.json` file. 
+
+By default, the sandbox is entirely isolated in an ephemeral temporary folder. To grant the script permission to read files in the current directory (`.`), create a `webrun.json` like this:
+
+```json
+{
+  "permissions": {
+    "storage": {
+      ".": { "access": "read" }
+    }
+  }
+}
+```
+
+Create a script `main.ts` that uses the sandbox context object (`ctx`) to read a file using standard Web API `FileSystemDirectoryHandle` methods:
+
+```typescript
+// main.ts
+export default async function(ctx: any) {
+    // ctx.dir points to your sandboxed storage root
+    try {
+        const fileHandle = await ctx.dir.getFileHandle("hello.txt");
+        const file = await fileHandle.getFile();
+        console.log("File contents:", await file.text());
+    } catch (err: any) {
+        console.error("Failed to read file:", err.name);
+    }
+}
+```
+
+Create a test `hello.txt` file in the same directory:
+
+```bash
+echo "Hello from the sandbox!" > hello.txt
+```
+
+Finally, run the script securely through `webrun`:
+
+```bash
+./webrun main.ts
+```
 
 ## SYNOPSIS
 `webrun [options] <script.ts> [args...]`
@@ -21,6 +80,8 @@ To grant a script permission to access specific folders, network domains, or env
   Run the built-in test suite to verify the sandbox is working correctly.
 - `--self-bundle`
   Package the `webrun` source files into a single executable file and print to stdout.
+- `--self-vendor`
+  Cache and vendor all external dependencies natively within the repository for offline accessibility.
 - `--self-unbundle <dest>`
   Extract the `webrun` source files from the executable into a folder for editing.
 
@@ -132,7 +193,7 @@ export default async function(ctx) {
 
 
 ### File System Access
-Scripts cannot use standard `fs` or `Deno` globals to interact with the file system. You must use `ctx.dir` (to access the host directory mapped by the configuration) or `navigator.storage` (for temporary sandbox-isolated OPFS storage). If you try to read or write a file outside of the allowed directory, the sandbox will block the operation.
+Scripts cannot use standard `fs` or other runtime-specific globals to interact with the file system. You must use `ctx.dir` (to access the host directory mapped by the configuration) or `navigator.storage` (for temporary sandbox-isolated OPFS storage). If you try to read or write a file outside of the allowed directory, the sandbox will block the operation.
 
 ### Testing Scripts
 If you run `webrun --test my_script.ts`, `webrun` will look for named exports that begin with `test` and execute them using the native test runner. You can also pass multiple test files at once, such as `webrun --test a.test.ts b.test.ts`, and all discovered test exports will be executed in a combined suite.
@@ -161,10 +222,10 @@ export async function testMyFunction(t, ctx) {
 
 ## SECURITY MODEL
 
-The web browser provides one of the most robust and widely used sandboxes available. It successfully balances the needs of complex applications with user security. `webrun` brings a similar security model to command-line scripts. By using a browser-compatible sandbox, `webrun` is particularly well-suited for running AI-generated code or autonomous agents that need to interact with the filesystem, as it ensures they cannot exceed explicit permissions.
+`webrun` brings a strict browser-style sandbox to the command-line. It balances a simple user experience with the ability to safely host autonomous agents and the code they generate.
 
 ### Threat Model
-`webrun` is designed with the assumption that the executed script is actively hostile, whether it is a malfunctioning autonomous agent, the result of a malicious prompt injection, or a compromised dependency.
+`webrun` assumes the executed script is potentially hostile (e.g., a malfunctioning agent, malicious prompt injection, or compromised dependency).
 
 We design protections against a script attempting to:
 1. **Escalate permissions:** All permissions must be explicitly declared in `webrun.json`.
@@ -174,18 +235,24 @@ We design protections against a script attempting to:
 5. **Exfiltrate data:** Network access is denied by default and must be explicitly allowed for specific domains.
 6. **Bypass nested limits:** When configurations are nested, a child directory's configuration can only reduce its permissions compared to its parent's configuration, never increase them.
 
-### Relationship with Deno
-`webrun` uses Deno for executing JavaScript and TypeScript. However, it applies a custom, locked-down security model, a browser-like filesystem API, and on macOS, an additional OS-level sandbox. The native `Deno` namespace is removed from the execution environment.
+### Design Rationale
 
-#### Why not use Deno directly?
-Deno has an excellent permission system, but it is designed for a scenario where a **trusted user** controls the execution environment and intentionally grants permissions to a program. `webrun` is designed for a scenario where a **untrusted program** controls the execution environment.
+`webrun` uses Deno for execution, but enforces a browser-compatible environment (which means the `Deno` API namespace *is not available* to user scripts).
 
-If an autonomous agent is running a tool using standard Deno, the agent itself could simply provide command-line flags (like `--allow-all`) to grant itself maximum permissions. By moving configuration into static `webrun.json` files that the script cannot modify, `webrun` prevents the script from changing its own permissions.
+#### Why not use an existing runtime directly?
 
-Additionally, by providing a W3C `StorageManager` API, scripts written for `webrun` can be run directly in a web browser without modification.
+Existing runtimes like Deno have excellent permission systems, but they assume a **trusted user** launches the program. In contrast, `webrun` assumes an **untrusted program** is launching it.
 
-On macOS, we also add an OS-level sandbox (`sandbox-exec`), similar to how Google Chrome operates, which Deno does not do by default.
+If an autonomous agent runs a tool using an existing runtime, it can use a flag like `--allow-all` to disable the sandbox. By moving configuration into a `webrun.json` that the script cannot modify, `webrun` prevents a program from modifying or disabling its own sandbox.
+
+Additionally, by providing a standard W3C `FileSystemDirectoryHandle` API to access the filesystem, scripts written for `webrun` can run directly in a web browser without modification.
+
+On macOS, we also enforce an OS-level sandbox (`sandbox-exec`), similar to how Google Chrome operates, adding a secondary defense layer missing from default engine configurations.
 
 ## RUNTIME AND CACHING
 
-On its first run, `webrun` automatically downloads an isolated Deno runtime and extracts its own TypeScript source code into `~/.cache/webrun/`. This keeps `webrun` completely self-contained, prevents conflicts with any globally installed tools, and keeps your project's working directory clean.
+On its first run, `webrun` automatically downloads the isolated Deno engine into `~/.cache/webrun/`. This prevents conflicts with globally installed tools. The bundled `webrun` executable runs completely in-memory or from localized file evaluations cleanly without polluting the host environment.
+
+## MAINTENANCE AND CONTRIBUTING
+
+For information on how the repository is organized, how to update dependencies using native vendoring structures, and instructions on running tests and executing distributions, please refer to the [Maintenance and Contribution Guide](MAINTENANCE.md).
