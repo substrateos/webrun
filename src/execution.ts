@@ -1,4 +1,4 @@
-import { resolve, dirname } from "https://deno.land/std@0.224.0/path/mod.ts";
+import { resolve, dirname, isAbsolute } from "https://deno.land/std@0.224.0/path/mod.ts";
 import { pathToFileURL } from "node:url";
 import { sys, printWarning, printExecutionError, printFatalError, printSecurityFatal, tryRealpathSync, tryStatSync, tryRemoveSync } from "./sys.ts";
 import { WebrunConfig, SandboxContextPayload } from "./types.ts";
@@ -613,8 +613,8 @@ function buildMacSandboxArgs(
         "-D", `WEBRUN_DENO_JSONC=${resolve(projectRoot, "deno.jsonc")}`,
         "-D", `WEBRUN_DENO_LOCK=${lockFlag.length ? lockFlag[0].split('=')[1] : resolve(projectRoot, "deno.lock")}`,
         "-D", `WEBRUN_SCRIPT_PATH=${sys.realPathSync(new URL(import.meta.url).pathname)}`,
-        "-D", `WEBRUN_DENO_BIN_DIR=${dirname(sys.execPath())}`,
-        "-D", `WEBRUN_DENO_BIN_PATH=${sys.execPath()}`,
+        "-D", `WEBRUN_EXEC_DIR=${dirname(sys.execPath())}`,
+        "-D", `WEBRUN_EXEC_PATH=${sys.execPath()}`,
         sys.execPath(),
         ...innerDenoArgs
     ] : innerDenoArgs;
@@ -791,7 +791,7 @@ function validateSandboxSafetyBoundaries(policy: any, cwd: string, protectedFile
     }
 }
 
-function setupBindingProcesses(config: WebrunConfig, cwd: string, configDir: string, policy: any, bindingSdksTmp: string, importMapPath: string) {
+function setupBindingProcesses(config: WebrunConfig, cwd: string, configDir: string, policy: any, bindingSdksTmp: string, importMapPath: string, isolatedTmp: string, runnerTmp: string, opfsTmp: string, logsDir: string) {
     const bindingsMap: Record<string, any> = {};
     const ephemeralPorts: number[] = [];
     const activeProcesses: any[] = [];
@@ -818,18 +818,88 @@ function setupBindingProcesses(config: WebrunConfig, cwd: string, configDir: str
                 
                 if (processConfig.portEnv) allowedEnv[processConfig.portEnv] = String(port);
                 const cmdExe = processConfig.command[0] === "deno" ? sys.execPath() : processConfig.command[0];
-                const cmd = new sys.Command(cmdExe, {
-                    args: processConfig.command.slice(1),
+                let resolvedCmdExe = cmdExe;
+                if (!isAbsolute(cmdExe)) {
+                    for (const p of (sys.env.get("PATH") || "").split(":")) {
+                        const candidate = resolve(p, cmdExe);
+                        if (tryStatSync(candidate)?.isFile) {
+                            resolvedCmdExe = candidate;
+                            break;
+                        }
+                    }
+                }
+                
+                let runCmd = cmdExe;
+                let runArgs = processConfig.command.slice(1);
+                
+                if (sys.build.os === "darwin") {
+                    const processPolicy = evaluateEnclavePolicy(processConfig.permissions?.storage || {}, [], configDir, cwd, isolatedTmp);
+                    const webrunEntryPath = new URL(import.meta.url).pathname;
+                    const { readEnclaves, writeEnclaves } = generateSeatbeltEnclaveStrings(processPolicy, runnerTmp, opfsTmp, bindingSdksTmp, webrunEntryPath);
+                    const seatbeltProfile = generateSeatbeltProfile(cwd, readEnclaves, writeEnclaves, [port], !!processConfig.permissions?.gpu);
+                    const profilePath = resolve(bindingSdksTmp, `${name}_sandbox.sb`);
+                    sys.writeTextFileSync(profilePath, seatbeltProfile);
+                    const webrunEntryUrl = sys.realPathSync(new URL(import.meta.url).pathname);
+                    runCmd = "sandbox-exec";
+                    runArgs = [
+                        "-f", profilePath,
+                        "-D", `WEBRUN_EXEC_DIR=${tryRealpathSync(dirname(resolvedCmdExe)) || dirname(resolvedCmdExe)}`,
+                        "-D", `WEBRUN_EXEC_PATH=${tryRealpathSync(resolvedCmdExe) || resolvedCmdExe}`,
+                        "-D", `WEBRUN_SANDBOX_CACHE=${resolve(sys.env.get("HOME") || "/tmp", ".webrun_cache")}`,
+                        "-D", `WEBRUN_ISOLATED_TMP=${isolatedTmp}`,
+                        "-D", `WEBRUN_DENO_JSON=${resolve(cwd, "deno.json")}`,
+                        "-D", `WEBRUN_DENO_JSONC=${resolve(cwd, "deno.jsonc")}`,
+                        "-D", `WEBRUN_DENO_LOCK=${resolve(cwd, "deno.lock")}`,
+                        "-D", `WEBRUN_SCRIPT_PATH=${webrunEntryUrl}`,
+                        cmdExe,
+                        ...processConfig.command.slice(1)
+                    ];
+                }
+
+                const logPath = resolve(logsDir, `${name}.log`);
+                const logFile = (globalThis as any).Deno.openSync(logPath, { write: true, create: true, append: true });
+
+                const cmd = new sys.Command(runCmd, {
+                    args: runArgs,
                     cwd: cwd,
                     env: allowedEnv,
                     clearEnv: true,
                     stdin: "null",
-                    stdout: "inherit",
-                    stderr: "inherit"
+                    stdout: logFile.rid,
+                    stderr: logFile.rid
                 });
                 
                 try {
-                    activeProcesses.push(cmd.spawn());
+                    const child = cmd.spawn();
+                    activeProcesses.push(child);
+                    console.error(`\x1b[90m[webrun binding: ${name}]\x1b[0m \x1b[35mStarting service...\x1b[0m`);
+                    console.error(`\x1b[90m  └─ Logs: ${logPath}\x1b[0m`);                    child.status.then((status: any) => {
+                        try { logFile.close(); } catch (_) {}
+                        
+                        // Ignore expected process disruption codes that occur when WebRun naturally terminates the parent JS context
+                        // 130: SIGINT, 137: SIGKILL, 141: SIGPIPE, 143: SIGTERM 
+                        const expectedTerminationCodes = [130, 137, 141, 143];
+                        if (!expectedTerminationCodes.includes(status.code)) {
+                            const exitColor = status.code === 0 ? '\x1b[32m' : '\x1b[31m';
+                            const eventName = status.code === 0 ? 'exited gracefully' : 'terminated unexpectedly';
+                            console.error(`\x1b[90m[webrun binding: ${name}]\x1b[0m ${exitColor}Service ${eventName} (Code: ${status.code})\x1b[0m`);
+                            
+                            if (status.code !== 0) {
+                                try {
+                                    const text = sys.readTextFileSync(logPath);
+                                    const lines = text.split('\n').filter(Boolean);
+                                    const lastLines = lines.slice(-15);
+                                    if (lastLines.length > 0) {
+                                        const displayPath = logPath.replace(sys.env.get("HOME") || "", "~");
+                                        console.error(`\x1b[90m  │  $ tail -n 15 ${displayPath}\x1b[0m`);
+                                        for (const line of lastLines) {
+                                            console.error(`\x1b[90m  │ \x1b[0m \x1b[37m${line}\x1b[0m`);
+                                        }
+                                    }
+                                } catch (_) {}
+                            }
+                        }
+                    });
                 } catch (e: any) {
                     printExecutionError(`Failed to spawn binding process ${name}: ${e.message}`);
                     sys.exit(1);
@@ -873,7 +943,19 @@ export async function spawnSandboxProcess(cwd: string, args: string[]) {
     const runnerTmp = sys.realPathSync(sys.makeTempDirSync({ prefix: 'webrun_runner_' }));
     const opfsTmp = sys.realPathSync(sys.makeTempDirSync({ prefix: 'webrun_opfs_' }));
     const bindingSdksTmp = sys.realPathSync(sys.makeTempDirSync({ prefix: 'webrun_bindings_' }));
-    const { config, configDir, configFound, configPaths, importMapPaths } = resolveLocalConfiguration(cwd);
+    const argsCopy = args.slice();
+    const peekedArgs = parseRawArguments(argsCopy);
+    let configResolveDir = cwd;
+    if (!peekedArgs.isEval && !peekedArgs.isSelfTest) {
+        if (Array.isArray(peekedArgs.targetScriptPath) && peekedArgs.targetScriptPath.length > 0) {
+            const resolvedPath = tryRealpathSync(peekedArgs.targetScriptPath[0]) || resolve(cwd, peekedArgs.targetScriptPath[0]);
+            configResolveDir = dirname(resolvedPath);
+        } else if (typeof peekedArgs.targetScriptPath === "string") {
+            const resolvedPath = tryRealpathSync(peekedArgs.targetScriptPath) || resolve(cwd, peekedArgs.targetScriptPath);
+            configResolveDir = dirname(resolvedPath);
+        }
+    }
+    const { config, configDir, configFound, configPaths, importMapPaths } = resolveLocalConfiguration(configResolveDir);
 
     const MAX_V8_MEM_MB = config.limits?.memoryMB || 512;
 
@@ -903,12 +985,16 @@ export async function spawnSandboxProcess(cwd: string, args: string[]) {
 
     const importMapPath = buildNodeSinkholeDependencies(isolatedTmp, importMapPaths);
 
-    const { bindingsMap, ephemeralPorts, activeProcesses } = setupBindingProcesses(config, cwd, configDir, policy, bindingSdksTmp, importMapPath);
+    const runId = crypto.randomUUID();
+    const logsDir = resolve(sys.env.get("HOME") || "/tmp", ".webrun", "logs", runId);
+    try { sys.mkdirSync(logsDir, { recursive: true }); } catch (_) {}
+
+    const { bindingsMap, ephemeralPorts, activeProcesses } = setupBindingProcesses(config, cwd, configDir, policy, bindingSdksTmp, importMapPath, isolatedTmp, runnerTmp, opfsTmp, logsDir);
 
     // 3. Compile Security Vectors
     const webrunEntryPath = new URL(import.meta.url).pathname;
     const { readEnclaves, writeEnclaves } = generateSeatbeltEnclaveStrings(policy, runnerTmp, opfsTmp, bindingSdksTmp, webrunEntryPath);
-    const seatbeltProfile = generateSeatbeltProfile(cwd, readEnclaves, writeEnclaves, ephemeralPorts);
+    const seatbeltProfile = generateSeatbeltProfile(cwd, readEnclaves, writeEnclaves, ephemeralPorts, !!config.permissions?.gpu);
 
     const lockFlag: string[] = [];
     const lockFilePath = resolve(projectRoot, "deno.lock");

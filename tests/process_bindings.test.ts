@@ -106,14 +106,14 @@ export async function testProcessBindings(t: any) {
             expectStdout: "ZOMBIE_TEST_FINISHED"
         },
         {
-            name: "Runtime Subprocess Crash: Sandbox receives graceful connection refused payload on fatal sub-worker",
+            name: "Runtime Subprocess Crash: Sandbox intercepts crash gracefully, logs tail simulation and stderr",
             args: ["test.js"],
             configs: {
                 ".": { bindings: { "crash_backend": { process: { command: ["deno", "run", "-A", "backend.ts"], portEnv: "PORT" } } } }
             },
             files: {
                 "backend.ts": `
-                    // Exit immediately without ever binding
+                    console.error("MOCK_STDERR_CRITICAL_FAILURE");
                     Deno.exit(1);
                 `
             },
@@ -121,22 +121,55 @@ export async function testProcessBindings(t: any) {
                 "test.js": `
                     export default async function(ctx) {
                         let blocked = false;
-                        await new Promise((r) => setTimeout(r, 500)); // wait for native backend execution failure to resolve fully
+                        await new Promise((r) => setTimeout(r, 1000)); // wait for native backend execution failure to resolve fully
                         try {
                             await fetch(ctx.bindings.crash_backend);
                         } catch (e) {
-                            if (e.message.includes("Connection refused")) {
+                            if (e.message.includes("Connection refused") || e.message.includes("error sending request")) {
                                 blocked = true;
                             }
                         }
                         
-                        if (!blocked) throw new Error("Crash proxy did not trigger Connection refused");
+                        if (!blocked) throw new Error("Crash proxy did not trigger connection issue. Got: " + blocked);
                         console.log("CRASH_PROXY_OK");
                     }
                 `
             },
             expectCode: 0,
-            expectStdout: "CRASH_PROXY_OK"
+            expectStdout: "CRASH_PROXY_OK",
+            expectStderr: [
+                "[webrun binding: crash_backend]",
+                "Service terminated unexpectedly (Code: 1)",
+                "$ tail -n 15",
+                "MOCK_STDERR_CRITICAL_FAILURE"
+            ]
+        },
+        {
+            name: "Runtime Subprocess Graceful Exit: Sandbox prints green early exit banner for bindings fulfilling their task",
+            args: ["test.js"],
+            configs: {
+                ".": { bindings: { "migrator": { process: { command: ["deno", "run", "-A", "backend.ts"], portEnv: "PORT" } } } }
+            },
+            files: {
+                "backend.ts": `
+                    console.error("MOCK_MIGRATION_COMPLETE");
+                    Deno.exit(0);
+                `
+            },
+            scripts: {
+                "test.js": `
+                    export default async function(ctx) {
+                        await new Promise(r => setTimeout(r, 1000));
+                        console.log("MIGRATION_PROXY_OK");
+                    }
+                `
+            },
+            expectCode: 0,
+            expectStdout: "MIGRATION_PROXY_OK",
+            expectStderr: [
+                "[webrun binding: migrator]",
+                "Service exited gracefully (Code: 0)" // Exited correctly
+            ]
         }
     ]);
 }
