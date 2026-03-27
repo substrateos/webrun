@@ -713,24 +713,36 @@ export async function buildSandboxExecutionConfig(
 }
 
 async function handleCliCommands(args: string[], projectRoot: string) {
-    if (args.includes("--version") || args.includes("-v")) {
+    const webrunFlags: string[] = [];
+    for (let i = 0; i < args.length; i++) {
+        const arg = args[i];
+        if (arg === "--") break;
+        if (!arg.startsWith("-")) break;
+        webrunFlags.push(arg);
+        if (arg === "--eval" || arg === "-e") break;
+        if (arg === "--self-unbundle") {
+            if (i + 1 < args.length) webrunFlags.push(args[++i]);
+        }
+    }
+
+    if (webrunFlags.includes("--version") || webrunFlags.includes("-v")) {
         console.log(`webrun ${sys.env.get("WEBRUN_VERSION") || "dev"}`);
         sys.exit(0);
     }
 
-    if (args.includes("--self-check") || args.includes("--self-test")) {
+    if (webrunFlags.includes("--self-check") || webrunFlags.includes("--self-test")) {
         const checkCmd = new sys.Command(sys.execPath(), {
             args: ["check", new URL(import.meta.url).pathname],
             stdout: "inherit",
             stderr: "inherit"
         });
         const status = await checkCmd.output();
-        if (status.code !== 0 || !args.includes("--self-test")) {
+        if (status.code !== 0 || !webrunFlags.includes("--self-test")) {
             sys.exit(status.code);
         }
     }
 
-    if (args.includes("--help") || args.includes("-h")) {
+    if (webrunFlags.includes("--help") || webrunFlags.includes("-h")) {
         try {
             const selfPath = sys.env.get("WEBRUN_BIN") || resolve(projectRoot, "webrun");
             let readmeContent = sys.readTextFileSync(selfPath);

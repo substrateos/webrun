@@ -4,18 +4,26 @@ export async function testCLI(t: any) {
     await runTests(t, [
         {
             name: "Prints help screen when --help is passed",
-            args: ["src/test.js", "--help"],
-            scripts: {
-                "src/test.js": `export default async function() {}`
-            },
+            args: ["--help"],
             expectCode: 0,
         },
         {
-            name: "Prints version when --version is passed",
-            args: ["src/test.js", "--version"],
+            name: "Passes --help to target script when script is provided first",
+            args: ["src/test.js", "--help"],
             scripts: {
-                "src/test.js": `export default async function() {}`
+                "src/test.js": `
+                    import * as ctx from "webrun/ctx";
+                    export default async function() {
+                        if (ctx.flags.help) console.log("HELP_FLAG_PASSED");
+                    }
+                `
             },
+            expectCode: 0,
+            expectStdout: "HELP_FLAG_PASSED"
+        },
+        {
+            name: "Prints version when --version is passed",
+            args: ["--version"],
             expectCode: 0,
             expectStdout: "webrun dev"
         },
