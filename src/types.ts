@@ -8,6 +8,7 @@ export interface WebrunConfig {
         network?: string[];
         env?: string[];
         bindings?: string[];
+        gpu?: boolean;
     };
     bindings?: Record<string, any>;
     importMap?: string;
@@ -41,5 +42,6 @@ export interface SandboxContextPayload {
     memoryMB?: number;
     bindingsMap: Record<string, { type: "process" | "module"; uuid: string; path?: string; port?: number }>;
     allowedBindings: Record<string, { access: "read" | "write" }>;
+    allowGpu?: boolean;
 }
 

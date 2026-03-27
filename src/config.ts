@@ -220,7 +220,11 @@ export function evaluateEnclavePolicy(configDirs: Record<string, { access: "read
     const allowedWritePaths: string[] = [];
     const allowedBindings: string[] = [];
 
-    for (const [fsPath, settings] of Object.entries(configDirs)) {
+    for (let [fsPath, settings] of Object.entries(configDirs)) {
+        if (fsPath.startsWith("~/")) {
+            fsPath = (sys.env.get("HOME") || "") + fsPath.slice(1);
+        }
+        
         const absFsPath = resolve(configDir, fsPath);
         if (currentDir === absFsPath || currentDir.startsWith(absFsPath + "/")) {
             isPwdAllowed = true;
@@ -299,10 +303,17 @@ export function generateSeatbeltEnclaveStrings(policy: EnclavePolicy, runnerTmp:
     return { readEnclaves, writeEnclaves };
 }
 
-export function generateSeatbeltProfile(cwd: string, readEnclaves: string, writeEnclaves: string, ephemeralPorts: number[] = []): string {
-    let extraNetwork = "";
+export function generateSeatbeltProfile(cwd: string, readEnclaves: string, writeEnclaves: string, ephemeralPorts: number[] = [], allowGpu: boolean = false): string {
+    let extraNetworkOutbound = "";
+    let extraNetworkInbound = "";
     for (const port of ephemeralPorts) {
-        extraNetwork += `\n    (remote tcp "localhost:${port}")`;
+        extraNetworkOutbound += `\n    (remote tcp "localhost:${port}")`;
+        extraNetworkInbound += `\n    (local tcp "*:${port}")\n    (local tcp "localhost:${port}")`;
+    }
+
+    let inboundBlock = "";
+    if (extraNetworkInbound) {
+        inboundBlock = `\n(allow network-inbound${extraNetworkInbound}\n)`;
     }
 
     return `(version 1)
@@ -313,11 +324,15 @@ export function generateSeatbeltProfile(cwd: string, readEnclaves: string, write
 (allow system-fsctl)
 (deny process-exec)
 (deny process-fork)
+${allowGpu ? `
+(allow iokit-open)
+(allow file-issue-extension)
+(allow user-preference-read)` : ""}
 
 (allow file-read* (literal "${cwd}"))
 
 (allow process-exec
-    (literal (param "WEBRUN_DENO_BIN_PATH"))
+    (literal (param "WEBRUN_EXEC_PATH"))
 )
 
 (allow file-read*
@@ -338,7 +353,7 @@ export function generateSeatbeltProfile(cwd: string, readEnclaves: string, write
 )
 
 (allow file-read* file-map-executable
-    (subpath (param "WEBRUN_DENO_BIN_DIR"))
+    (subpath (param "WEBRUN_EXEC_DIR"))
 )
 
 (allow system-socket)
@@ -349,12 +364,12 @@ export function generateSeatbeltProfile(cwd: string, readEnclaves: string, write
     (remote tcp "*:443")
     (remote tcp "*:80")  
     (remote udp "*:53")  
-    (literal "/private/var/run/mDNSResponder")${extraNetwork}
+    (literal "/private/var/run/mDNSResponder")${extraNetworkOutbound}
 )
-
+${inboundBlock}
 (allow file-read* file-write*
     (subpath (param "WEBRUN_SANDBOX_CACHE"))
-    (subpath (param "WEBRUN_ISOLATED_TMP"))${writeEnclaves}
+    (subpath (param "WEBRUN_ISOLATED_TMP"))${allowGpu ? `\n    (regex #"^/private/var/folders/.*$")` : ""}${writeEnclaves}
 )
 
 (allow file-read*
