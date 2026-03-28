@@ -1,0 +1,11 @@
+[
+  {
+    "name": "Discovers and applies webrun key natively via package.json fallback schema",
+    "args": ["--module", "test_pkg.js"],
+    "cwd": "testing_dir",
+    "expect": {
+      "exit_code": 0,
+      "stdout": [{"contains": "PKG_JSON_FALLBACK_OK"}]
+    }
+  }
+]

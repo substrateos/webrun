@@ -1,0 +1,1 @@
+{"scopes": {"./child-scope/": {"utils_mod": "data:text/javascript,export const a = 'child-a';"}}}

@@ -1,0 +1,1 @@
+{"bindings": {"filtered": {"process": {"command": ["deno", "run", "-A", "backend.ts"], "portEnv": "PORT", "permissions": {"env": ["ALLOWED_VAR"]}}}}}

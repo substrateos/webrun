@@ -51,6 +51,9 @@ WEBRUN_DENO_DIR="${WEBRUN_DENO_DIR:-$DEFAULT_DENO_DIR}"
 DENO_BIN="$WEBRUN_DENO_DIR/deno"
 DENO_DIR="$WEBRUN_DENO_DIR"
 
+# Do not let deno check for updates. It's slow and we don't need it.
+export DENO_NO_UPDATE_CHECK=1
+
 if [ ! -f "$DENO_BIN" ]; then
   echo "Downloading Deno ${DENO_VERSION} for $DENO_TARGET..." >&2
   mkdir -p "$DENO_DIR"
@@ -106,7 +109,12 @@ if [[ "$1" == "--self-unbundle" ]]; then
   const re = /sourceMappingURL=data:application\/json;base64,([a-zA-Z0-9+/=]+)/g;
   let m;
   while((m = re.exec(b)) !== null) {
-    const sm = JSON.parse(atob(m[1]));
+    const binString = atob(m[1]);
+    const bytes = new Uint8Array(binString.length);
+    for (let i = 0; i < binString.length; i++) {
+      bytes[i] = binString.charCodeAt(i);
+    }
+    const sm = JSON.parse(new TextDecoder().decode(bytes));
     if (!sm.sources) continue;
     for (let i = 0; i < sm.sources.length; i++) {
       const s = sm.sources[i];
@@ -158,11 +166,15 @@ if [[ "$1" == "--self-bundle" ]]; then
       exit 1
     fi
   done
+  # Reproducible builds: deno bundle embeds paths relative to CWD in comments,
+  # module registry keys, and inline source map sources[]. Running from $SRC_DIR
+  # ensures all paths are relative (e.g. "src/foo.ts" not "/abs/path/src/foo.ts"),
+  # making the output byte-identical regardless of where the source directory is.
   awk '/^__DATA__/ {exit} {print}' "$SRC_DIR/webrun"
   echo "__DATA__"
-  "$DENO_BIN" bundle --config "$SRC_DIR/deno.json" --external=webrun/ctx --sourcemap=inline "$SRC_DIR/webrun.ts" 2>/dev/null || cat "$SRC_DIR/webrun.ts"
+  (cd "$SRC_DIR" && "$DENO_BIN" bundle --config deno.json --external=webrun/ctx --sourcemap=inline webrun.ts 2>/dev/null) || cat "$SRC_DIR/webrun.ts"
   echo "__TEST_DATA__"
-  "$DENO_BIN" bundle --config "$SRC_DIR/deno.json" --external=webrun/ctx --sourcemap=inline "$SRC_DIR/webrun.test.ts" 2>/dev/null || cat "$SRC_DIR/webrun.test.ts"
+  (cd "$SRC_DIR" && "$DENO_BIN" bundle --config deno.json --external=webrun/ctx --sourcemap=inline webrun.test.ts 2>/dev/null) || cat "$SRC_DIR/webrun.test.ts"
   echo "__README_DATA__"
   cat "$SRC_DIR/README.md"
   echo "__LICENSE_DATA__"
@@ -205,16 +217,16 @@ if [[ "$1" == "--self-test" ]]; then
   if grep -q "^__TEST_DATA__" "$SOURCE"; then
     DENO_TEST_SCRIPT=$(mktemp)
     mv "$DENO_TEST_SCRIPT" "$DENO_TEST_SCRIPT.js"
-    DENO_TEST_SCRIPT="$DENO_TEST_SCRIPT.js"
+    DENO_TEST_SCRIPT=$(realpath "$DENO_TEST_SCRIPT.js")
     awk '/^__TEST_DATA__/ {flag=1; next} /^__README_DATA__/ {flag=0} flag { if ($0 !~ /^\/\/# sourceMappingURL=/) print }' "$SOURCE" > "$DENO_TEST_SCRIPT"
 
     # Extract the main deno script as well
     DENO_SCRIPT=$(mktemp)
     mv "$DENO_SCRIPT" "$DENO_SCRIPT.js"
-    DENO_SCRIPT="$DENO_SCRIPT.js"
+    DENO_SCRIPT=$(realpath "$DENO_SCRIPT.js")
     awk '/^__DATA__/ {flag=1; next} /^__TEST_DATA__/ {flag=0} flag { if ($0 !~ /^\/\/# sourceMappingURL=/) print }' "$SOURCE" > "$DENO_SCRIPT"
     
-    WEBRUN_BIN="$WEBRUN_BIN" "$DENO_BIN" run -A --no-check --unstable-worker-options $COVERAGE_FLAG "$DENO_SCRIPT" --self-test "$DENO_TEST_SCRIPT" "${FILTER_ARGS[@]}"
+    WEBRUN_BIN="$WEBRUN_BIN" "$DENO_BIN" run --allow-read --allow-write --deny-write="$SCRIPT_DIR" --allow-run --allow-net=127.0.0.1,0.0.0.0 --allow-import --allow-env --allow-sys=networkInterfaces --no-lock --config "$SCRIPT_DIR/deno.json" --no-check --unstable-worker-options --unstable-net $COVERAGE_FLAG "$DENO_SCRIPT" --self-test "$DENO_TEST_SCRIPT" "${FILTER_ARGS[@]}"
     EXIT_CODE=$?
     rm -f "$DENO_TEST_SCRIPT"
     rm -f "$DENO_SCRIPT"
@@ -223,7 +235,7 @@ if [[ "$1" == "--self-test" ]]; then
     fi
     exit $EXIT_CODE
   else
-    "$DENO_BIN" run -A --config "$SCRIPT_DIR/deno.json" --no-check --unstable-worker-options $COVERAGE_FLAG "$SCRIPT_DIR/webrun.ts" --self-test "$SCRIPT_DIR/webrun.test.ts" "${FILTER_ARGS[@]}"
+    "$DENO_BIN" run --allow-read --allow-write --deny-write="$SCRIPT_DIR" --allow-run --allow-net=127.0.0.1,0.0.0.0 --allow-import --allow-env --allow-sys=networkInterfaces --no-lock --config "$SCRIPT_DIR/deno.json" --no-check --unstable-worker-options --unstable-net $COVERAGE_FLAG "$SCRIPT_DIR/webrun.ts" --self-test "$SCRIPT_DIR/webrun.test.ts" "${FILTER_ARGS[@]}"
     EXIT_CODE=$?
     if [ -n "$COVERAGE_FLAG" ]; then
       "$DENO_BIN" coverage cov_profile
@@ -235,14 +247,13 @@ fi
 if grep -q "^__DATA__" "$SOURCE"; then
   DENO_SCRIPT=$(mktemp)
   mv "$DENO_SCRIPT" "$DENO_SCRIPT.js"
-  DENO_SCRIPT="$DENO_SCRIPT.js"
+  DENO_SCRIPT=$(realpath "$DENO_SCRIPT.js")
   awk '/^__DATA__/ {flag=1; next} /^__TEST_DATA__/ {flag=0} flag { if ($0 !~ /^\/\/# sourceMappingURL=/) print }' "$SOURCE" > "$DENO_SCRIPT"
   
-  WEBRUN_BIN="$WEBRUN_BIN" "$DENO_BIN" run -A --no-check --unstable-worker-options "$DENO_SCRIPT" "$@"
+  WEBRUN_BIN="$WEBRUN_BIN" "$DENO_BIN" run -A --no-check --unstable-worker-options --unstable-net "$DENO_SCRIPT" "$@"
   EXIT_CODE=$?
   rm -f "$DENO_SCRIPT"
   exit $EXIT_CODE
 else
-  "$DENO_BIN" run -A --config "$SCRIPT_DIR/deno.json" --no-check --quiet --unstable-worker-options "$SCRIPT_DIR/webrun.ts" "$@"
-  exit $?
+  exec "$DENO_BIN" run -A --config "$SCRIPT_DIR/deno.json" --no-check --quiet --unstable-worker-options --unstable-net "$SCRIPT_DIR/webrun.ts" "$@"
 fi

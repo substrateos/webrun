@@ -1,0 +1,13 @@
+[
+  {
+    "name": "Aborts if policy allows writing to the top-level webrun.json directory",
+    "args": ["--module", "src/test.js"],
+    "expect": {
+      "exit_code": 1,
+      "stderr": [
+        {"contains": "[Security Fatal] The webrun file is within a permitted write directory. Refusing to run."},
+        {"contains": "Executable:"}
+      ]
+    }
+  }
+]

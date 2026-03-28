@@ -1,0 +1,1 @@
+{"permissions": {"env": ["A"], "network": ["a.com"], "storage": {".": {"access": "read"}, "narrow_dir": {"access": "write"}}}, "limits": {"timeoutMillis": 5000, "memoryMB": 256}}

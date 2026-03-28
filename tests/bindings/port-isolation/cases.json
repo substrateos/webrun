@@ -1,0 +1,10 @@
+[
+  {
+    "name": "Port Isolation: Binding ports unreachable from guest, only mux route works",
+    "args": ["--module", "test.js"],
+    "expect": {
+      "exit_code": 0,
+      "stdout": [{"contains": "PORT_ISOLATION_OK"}]
+    }
+  }
+]

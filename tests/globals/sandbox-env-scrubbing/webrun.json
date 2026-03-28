@@ -1,0 +1,1 @@
+{"permissions": {"storage": {".": {"access": "read"}, "data": {"access": "write"}}, "network": ["*"]}, "limits": {"timeoutMillis": 300000, "memoryMB": 4096}}

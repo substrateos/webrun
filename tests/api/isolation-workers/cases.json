@@ -1,0 +1,4 @@
+[
+  { "name": "Does not inject Node capabilities or Deno native globals into Web Workers", "args": ["--module", "src/globals_test.js"], "expect": { "exit_code": 0, "stdout": [{"contains": "SUCCESS"}] } },
+  { "name": "Exposes Web Worker API with zero permissions implicitly", "args": ["--module", "src/perms_test.js"], "expect": { "exit_code": 0, "stdout": [{"contains": "SUCCESS"}] } }
+]

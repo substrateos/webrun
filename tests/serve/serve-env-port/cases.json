@@ -1,0 +1,3 @@
+[
+  { "name": "$PORT Environment Variable Fallback", "args": ["--serve", "."], "env": {"PORT": "19103"}, "cwd": "empty_dir", "signal": "SIGTERM", "timeout_ms": 5000, "expect": { "exit_code": 0, "ready": { "stdout": [{"contains": "Webrun serving at http://127.0.0.1:19103/"}] } } }
+]

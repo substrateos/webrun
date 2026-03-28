@@ -1,0 +1,10 @@
+[
+  {
+    "name": "Provides an isolated workspace accessible via getDirectory()",
+    "args": ["--module", "src/test.js"],
+    "expect": {
+      "exit_code": 0,
+      "stdout": [{"contains": "OPFS_OK"}]
+    }
+  }
+]

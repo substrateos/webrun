@@ -1,0 +1,4 @@
+[
+  { "name": "Implicit Random Port", "args": ["--serve", "."], "cwd": "empty_dir", "signal": "SIGTERM", "timeout_ms": 5000, "expect": { "exit_code": 0, "ready": { "stdout": [{"contains": "Webrun serving at http://127.0.0.1:"}] } } },
+  { "name": "Explicit Host Only (--serve --bind=0.0.0.0)", "args": ["--serve", "--bind=0.0.0.0", "."], "cwd": "empty_dir", "signal": "SIGTERM", "timeout_ms": 5000, "expect": { "exit_code": 0, "ready": { "stdout": [{"contains": "Webrun serving at http://0.0.0.0:"}] } } }
+]

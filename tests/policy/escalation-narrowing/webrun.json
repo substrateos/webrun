@@ -1,0 +1,1 @@
+{"permissions": {"env": ["A", "B"], "network": ["a.com", "b.com"], "storage": {".": {"access": "write"}}}, "limits": {"timeoutMillis": 10000, "memoryMB": 512}}

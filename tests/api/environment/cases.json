@@ -1,0 +1,10 @@
+[
+  {
+    "name": "Injects host environment variables explicitly requested by string array",
+    "args": ["--module", "src/test.js"],
+    "env": {"MY_HOST_VAR": "host_injected_value"},
+    "expect": {
+      "exit_code": 0
+    }
+  }
+]

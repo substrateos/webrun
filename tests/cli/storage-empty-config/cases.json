@@ -1,0 +1,9 @@
+[
+  {
+    "name": "Falls back to temporary dir if webrun.json has no storage allowlist",
+    "args": ["--module", "src/test.js"],
+    "expect": {
+      "exit_code": 0
+    }
+  }
+]

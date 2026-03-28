@@ -1,0 +1,14 @@
+[
+  {
+    "name": "ctx.webrun natively runs sub-workers with file writes",
+    "args": ["--module", "run.js"],
+    "cwd": "child",
+    "expect": { "exit_code": 0, "stdout": [{"contains": "RUN_OK"}] }
+  },
+  {
+    "name": "ctx.webrun natively runs --test sub-worker test runners",
+    "args": ["--module", "test_runner.js"],
+    "cwd": "child",
+    "expect": { "exit_code": 0, "stdout": [{"contains": "TEST_OK"}] }
+  }
+]

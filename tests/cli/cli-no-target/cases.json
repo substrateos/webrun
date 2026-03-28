@@ -1,0 +1,1 @@
+[{ "name": "Exits gracefully with a diagnostic error if no target or default configuration is explicitly provided", "args": [], "expect": { "exit_code": 1, "stderr": [{"contains": "No execution target specified."}, {"contains": "Provide a targeting flag (--module),"}, {"contains": "or define a 'module' entrypoint natively in your webrun.json file."}] } }]

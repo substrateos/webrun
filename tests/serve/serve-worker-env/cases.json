@@ -1,0 +1,17 @@
+[
+  {
+    "name": "Cloudflare Worker env context binding via HTTP probe",
+    "args": ["--serve", "--module", "worker.js"],
+    "cwd": "site",
+    "env": { "MY_VAR": "webrun_env_value" },
+    "signal": "SIGTERM",
+    "timeout_ms": 5000,
+    "expect": {
+      "exit_code": 0,
+      "ready": { "stdout": [{"contains": "Webrun serving at"}] },
+      "http": [
+        { "path": "/", "status": 200, "body": [{"contains": "webrun_env_value"}] }
+      ]
+    }
+  }
+]

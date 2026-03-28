@@ -1,0 +1,13 @@
+[
+  {
+    "name": "Aborts if policy allows writing to the webrun executable directory",
+    "args": ["--module", "src/test.js"],
+    "expect": {
+      "exit_code": 1,
+      "stderr": [
+        {"contains": "[Security Fatal] Storage permissions cannot traverse outside the configuration directory."},
+        {"contains": "Attempted :"}
+      ]
+    }
+  }
+]

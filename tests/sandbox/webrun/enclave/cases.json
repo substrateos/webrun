@@ -1,0 +1,11 @@
+[
+  {
+    "name": "Obeys dynamic webrun.json filesystem scope limits per-execution",
+    "args": ["--module", "test_script.js"],
+    "cwd": "my_custom_enclave",
+    "expect": {
+      "exit_code": 0,
+      "stdout": [{"contains": "ENCLAVE_SUCCESS"}]
+    }
+  }
+]

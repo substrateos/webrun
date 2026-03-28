@@ -1,0 +1,1 @@
+{"permissions": {"network": ["example.com"], "storage": {".": {"access": "read"}}}}

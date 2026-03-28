@@ -1,0 +1,1 @@
+{"permissions": {"storage": {".": {"access": "read"}}, "env": ["MY_HOST_VAR"]}}

@@ -1,0 +1,24 @@
+[
+  {
+    "name": "Rewrites synchronous Deno permission errors to provide WebRun configuration hints",
+    "args": ["--module", "src/sync_error.js"],
+    "expect": {
+      "exit_code": 1,
+      "stderr": [
+        {"contains": "Requires net access to \"example.com:443\"."},
+        {"contains": "Hint: Update the 'permissions' object in your webrun.json to allow this operation."}
+      ]
+    }
+  },
+  {
+    "name": "Rewrites unhandled promise Deno permission errors to provide WebRun configuration hints",
+    "args": ["--module", "src/async_error.js"],
+    "expect": {
+      "exit_code": 1,
+      "stderr": [
+        {"contains": "Requires net access to \"example.com:443\"."},
+        {"contains": "Hint: Update the 'permissions' object in your webrun.json to allow this operation."}
+      ]
+    }
+  }
+]

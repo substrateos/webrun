@@ -1,0 +1,10 @@
+[
+  {
+    "name": "Valid Import Map Resolution",
+    "args": ["--module", "src/valid.js"],
+    "expect": {
+      "exit_code": 0,
+      "stdout": [{"contains": "IMPORT_SUCCESS"}]
+    }
+  }
+]

@@ -1,0 +1,3 @@
+[
+  { "name": "Explicit Port Only (--serve --bind=:19102)", "args": ["--serve", "--bind=:19102", "."], "cwd": "empty_dir", "signal": "SIGTERM", "timeout_ms": 5000, "expect": { "exit_code": 0, "ready": { "stdout": [{"contains": "Webrun serving at http://127.0.0.1:19102/"}] } } }
+]

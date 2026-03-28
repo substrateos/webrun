@@ -1,0 +1,3 @@
+[
+  { "name": "Blocks SSRF to localhost even if network is open", "args": ["--module", "src/test.js"], "expect": { "exit_code": 1, "stderr": [{"contains": "BLOCKED:"}] } }
+]

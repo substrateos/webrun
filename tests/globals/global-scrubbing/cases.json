@@ -1,0 +1,8 @@
+[
+  {
+    "name": "Non-web globals (Deno, process, Buffer, global) are scrubbed from the sandbox",
+    "args": ["--module", "main.ts"],
+    "expect_webrun": { "exit_code": 0, "stdout": [{"contains": "GLOBALS_CLEAN"}] },
+    "expect_deno":   { "exit_code": 0, "stdout": [{"contains": "LEAKED_GLOBALS"}] }
+  }
+]

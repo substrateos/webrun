@@ -1,0 +1,1 @@
+[{ "name": "Permits valid narrowing of parent configuration and strictly enforces it", "args": ["--module", "test.js"], "env": {"A": "secret", "B": "leaked"}, "cwd": "child", "expect": { "exit_code": 0, "stdout": [{"contains": "NARROW_SUCCESS"}] } }]

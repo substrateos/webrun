@@ -1,0 +1,21 @@
+[
+  {
+    "name": "End-to-End Static Fetch via HTTP Probe",
+    "args": ["--serve", "."],
+    "cwd": "site",
+    "signal": "SIGTERM",
+    "timeout_ms": 5000,
+    "expect": {
+      "exit_code": 0,
+      "ready": { "stdout": [{"contains": "Webrun serving at"}] },
+      "stdout": [{"contains": "Mode: static files"}, {"contains": "GET /index.html 200"}],
+      "http": [
+        {
+          "path": "/index.html",
+          "status": 200,
+          "body": [{"contains": "webrun static proxy"}]
+        }
+      ]
+    }
+  }
+]

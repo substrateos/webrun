@@ -1,0 +1,3 @@
+[
+  { "name": "Explicit Host and Port (--serve --bind=127.0.0.1:19101)", "args": ["--serve", "--bind=127.0.0.1:19101", "."], "cwd": "empty_dir", "signal": "SIGTERM", "timeout_ms": 5000, "expect": { "exit_code": 0, "ready": { "stdout": [{"contains": "Webrun serving at http://127.0.0.1:19101/"}] } } }
+]

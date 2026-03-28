@@ -1,0 +1,1 @@
+[{ "name": "--test accepts a test file and runs it natively", "args": ["--test", "--module", "suite_a.test.ts"], "expect": { "exit_code": 0, "stdout": [{"contains": "RUNNING SUITE A"}], "stderr": [] } }]

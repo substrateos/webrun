@@ -1,0 +1,52 @@
+[
+  {
+    "name": "ctx.exit(0) exits cleanly with code 0",
+    "args": ["--module", "src/exit_zero.js"],
+    "expect": {
+      "exit_code": 0,
+      "stderr": [{"absent": "[Execution Error]"}]
+    }
+  },
+  {
+    "name": "ctx.exit(42) exits with code 42 and no stderr noise",
+    "args": ["--module", "src/exit_nonzero.js"],
+    "expect": {
+      "exit_code": 42,
+      "stderr": [{"absent": "[Execution Error]"}]
+    }
+  },
+  {
+    "name": "Throwing still produces [Execution Error] banner",
+    "args": ["--module", "src/throw_error.js"],
+    "expect": {
+      "exit_code": 1,
+      "stderr": [{"contains": "[Execution Error]"}]
+    }
+  },
+  {
+    "name": "Implicit exit(0) when main function returns normally",
+    "args": ["--module", "src/return_normal.js"],
+    "expect": {
+      "exit_code": 0,
+      "stderr": [{"absent": "[Execution Error]"}]
+    }
+  },
+  {
+    "name": "stdout and stderr are flushed before ctx.exit",
+    "args": ["--module", "src/flush_before_exit.js"],
+    "expect": {
+      "exit_code": 0,
+      "stdout": [{"contains": "STDOUT_BEFORE_EXIT"}],
+      "stderr": [{"contains": "STDERR_BEFORE_EXIT"}, {"absent": "[Execution Error]"}]
+    }
+  },
+  {
+    "name": "Heavy stdout output is fully flushed before ctx.exit",
+    "args": ["--module", "src/flush_heavy.js"],
+    "expect": {
+      "exit_code": 0,
+      "stdout": [{"contains": "LINE_0"}, {"contains": "LINE_99"}],
+      "stderr": [{"contains": "STDERR_FINAL"}, {"absent": "[Execution Error]"}]
+    }
+  }
+]

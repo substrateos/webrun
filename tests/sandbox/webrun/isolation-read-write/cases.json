@@ -1,0 +1,3 @@
+[
+  { "name": "Allows read/write within enclave (PWD)", "args": ["--module", "test.js"], "cwd": "data", "expect": { "exit_code": 0, "stdout": [{"contains": "SUCCESS"}] } }
+]

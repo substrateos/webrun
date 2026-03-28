@@ -1,0 +1,22 @@
+[
+  {
+    "name": "Cloudflare Worker Model - fetch echo via HTTP Probe",
+    "args": ["--serve", "--module", "worker.js"],
+    "cwd": "site",
+    "signal": "SIGTERM",
+    "timeout_ms": 5000,
+    "expect": {
+      "exit_code": 0,
+      "ready": { "stdout": [{"contains": "Webrun serving at"}] },
+      "http": [
+        {
+          "method": "POST",
+          "path": "/api/test",
+          "request_headers": {"x-webrun-test": "super-secret"},
+          "status": 200,
+          "body": [{"contains": "POST:super-secret"}]
+        }
+      ]
+    }
+  }
+]

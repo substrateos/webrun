@@ -1,0 +1,1 @@
+[{ "name": "Implicitly resolves default module evaluating from deeply nested ascendance traversal", "args": [], "cwd": "deeply/nested/dir/ect/ory", "expect": { "exit_code": 0, "stdout": [{"contains": "NESTED_CWD_TRAVERSAL_OK"}] } }]

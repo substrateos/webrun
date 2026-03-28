@@ -1,0 +1,1 @@
+{"permissions": {"env": ["API_KEY"], "storage": {".": {"access": "read"}}}}

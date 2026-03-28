@@ -1,0 +1,8 @@
+[
+  { "name": "Runs multiple positional test modules",
+    "args": ["--test", "a.test.ts", "b.test.ts"],
+    "expect": { "exit_code": 0, "stdout": [{"contains": "A_RAN"}, {"contains": "B_RAN"}] } },
+  { "name": "Filter applies across multiple positional modules",
+    "args": ["--test=B", "a.test.ts", "b.test.ts"],
+    "expect": { "exit_code": 0, "stdout": [{"contains": "B_RAN"}, {"absent": "A_RAN"}] } }
+]

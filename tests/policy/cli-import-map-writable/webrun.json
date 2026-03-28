@@ -1,0 +1,1 @@
+{"importMap": "my_import_map.json", "permissions": {"storage": {".": {"access": "write"}}}}

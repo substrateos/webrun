@@ -1,0 +1,10 @@
+[
+  {
+    "name": "Hostile Storage Mapping blocked",
+    "args": ["--module", "script.js"],
+    "expect": {
+      "exit_code": "nonzero",
+      "stderr": [{"contains": "[Security Fatal]"}]
+    }
+  }
+]

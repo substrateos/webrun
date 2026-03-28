@@ -1,0 +1,1 @@
+[{ "name": "Blocks memoryMB limit escalation", "args": ["--module", "test.js"], "cwd": "child", "expect": { "exit_code": 1, "stderr": [{"contains": "[Security Fatal] Privilege escalation detected in nested configuration."}, {"contains": "Reason    : Escalating 'memoryMB' limit"}, {"contains": "Attempted : 256"}, {"contains": "Permitted : 128"}] } }]

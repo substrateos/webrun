@@ -1,0 +1,9 @@
+[
+  {
+    "name": "Aborts runaway processes via webrun.json configurable timeout",
+    "args": ["--module", "src/test.js"],
+    "expect": {
+      "exit_code": 143
+    }
+  }
+]

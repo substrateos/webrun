@@ -1,6 +1,7 @@
 import { resolve, dirname, join } from "https://deno.land/std@0.224.0/path/mod.ts";
-import { sys, printUsageError, printWarning, printExecutionError, printFatalError, printSecurityFatal, tryRealpathSync } from "./sys.ts";
-import { WebrunConfig, CommandInvocation, SandboxContextPayload } from "./types.ts";
+import { tryRealpathSync } from "./sys.ts";
+import { printUsageError, printWarning, printExecutionError, printFatalError, printSecurityFatal } from "./log.ts";
+import { WebrunConfig, CommandInvocation, SandboxContextPayload, ConfigRuntime, adaptGlobalRuntime } from "./types.ts";
 // =========================================================
 // 2. PURE: CONFIGURATION & PARSING
 // =========================================================
@@ -12,13 +13,21 @@ export interface ParsedArgs {
     isEval: boolean;
     isCheckOnly: boolean;
     isNoCheck: boolean;
+    isServe: boolean;
+    serveInterfaces: { host: string; port: number }[];
     evalCode: string;
-    targetScriptPath: string | string[];
+    targetScriptPath: string;
+    targetModule: string;
     sandboxArgs: string[];
     injectedArgsObj: Record<string, any>;
+    filterPattern: string;
 }
 
-export function parseRawArguments(args: string[]): ParsedArgs {
+export function parseRawArguments(args: string[]): ParsedArgs;
+export function parseRawArguments(sys: ConfigRuntime, args: string[]): ParsedArgs;
+export function parseRawArguments(sysOrArgs: ConfigRuntime | string[], maybeArgs?: string[]): ParsedArgs {
+    const sys = Array.isArray(sysOrArgs) ? adaptGlobalRuntime() : sysOrArgs;
+    const args = Array.isArray(sysOrArgs) ? sysOrArgs : maybeArgs!;
     const rawArgs = [...args];
     let isTest = false;
     let isSelfTest = false;
@@ -26,12 +35,15 @@ export function parseRawArguments(args: string[]): ParsedArgs {
     let isEval = false;
     let isCheckOnly = false;
     let isNoCheck = false;
+    let isServe = false;
+    let serveInterfaces: { host: string; port: number }[] = [];
     let evalCode = "";
+    let filterPattern = "";
 
-    let targetScriptPath: string | string[] = "";
+    let targetScriptPath: string = "";
+    let targetModule = "";
     const injectedArgsObj: Record<string, any> = { "--": [] };
     let onlyPositional = false;
-    const testPaths: string[] = [];
     let scriptFound = false;
 
     const evalIdxExt = rawArgs.findIndex(a => a === "--eval" || a === "-e");
@@ -48,22 +60,24 @@ export function parseRawArguments(args: string[]): ParsedArgs {
         }
     }
 
-    const selfTestIdx = rawArgs.indexOf("--self-test");
+    const selfTestIdx = rawArgs.findIndex(a => a === "--self-test" || a.startsWith("--self-test="));
     if (selfTestIdx !== -1) {
         isTest = true;
         isSelfTest = true;
-        const testPayload = rawArgs[selfTestIdx + 1];
-        if (testPayload && !testPayload.startsWith("-")) {
-            testPaths.push(testPayload);
-            rawArgs.splice(selfTestIdx, 2);
-        } else {
-            rawArgs.splice(selfTestIdx, 1);
+        const selfTestArg = rawArgs[selfTestIdx];
+        if (selfTestArg.startsWith("--self-test=")) {
+            filterPattern = selfTestArg.slice("--self-test=".length);
         }
+        rawArgs.splice(selfTestIdx, 1);
     }
 
-    const testIdx = rawArgs.indexOf("--test");
+    const testIdx = rawArgs.findIndex(a => a === "--test" || a.startsWith("--test="));
     if (testIdx !== -1) {
         isTest = true;
+        const testArg = rawArgs[testIdx];
+        if (testArg.startsWith("--test=")) {
+            filterPattern = testArg.slice("--test=".length);
+        }
         rawArgs.splice(testIdx, 1);
     }
 
@@ -79,22 +93,12 @@ export function parseRawArguments(args: string[]): ParsedArgs {
         rawArgs.splice(noCheckIdx, 1);
     }
 
-    if (rawArgs.length === 0 && !isTest && !isEval && !isCheckOnly && !isSelfCheck && !isSelfTest) {
-        printUsageError("Usage: webrun [options] <script.ts> [args...]\\nRun with --help for documentation.");
-        sys.exit(1);
-    }
+    const isHelpOrVersion = rawArgs.some(a => a === "--help" || a === "-h" || a === "--version" || a === "-v");
 
     for (let i = 0; i < rawArgs.length; i++) {
         const arg = rawArgs[i];
         if (onlyPositional) {
-            if ((isTest || isCheckOnly) && !isSelfTest) {
-                testPaths.push(arg);
-            } else if (isSelfTest) {
-                printSecurityFatal("The --self-test execution mode strictly forbids external file paths.");
-                sys.exit(1);
-            } else {
-                injectedArgsObj["--"].push(arg);
-            }
+            injectedArgsObj["--"].push(arg);
             continue;
         }
         if (arg === "--") {
@@ -108,40 +112,38 @@ export function parseRawArguments(args: string[]): ParsedArgs {
             if (eqIdx !== -1) {
                 val = key.slice(eqIdx + 1);
                 key = key.slice(0, eqIdx);
-            } else if (i + 1 < rawArgs.length && !rawArgs[i + 1].startsWith("-") && rawArgs[i + 1] !== "--") {
+            } else if (!["serve"].includes(key) && i + 1 < rawArgs.length && !rawArgs[i + 1].startsWith("-") && rawArgs[i + 1] !== "--") {
                 val = rawArgs[++i];
             } else {
                 val = true;
             }
+            if (key === "module") { targetModule = val as string; scriptFound = true; continue; }
+            if (key === "serve") {
+                isServe = true;
+                continue;
+            }
+            if (key === "bind" || key === "listen") {
+                isServe = true;
+                if (val !== true && val !== "") {
+                    const strVal = val as string;
+                    let host = "127.0.0.1";
+                    let port = 0;
+                    if (strVal.startsWith(":")) {
+                        port = parseInt(strVal.slice(1), 10);
+                    } else if (strVal.includes(":")) {
+                        const parts = strVal.split(":");
+                        host = parts[0];
+                        port = parseInt(parts[1], 10);
+                    } else {
+                        host = strVal;
+                    }
+                    serveInterfaces.push({ host, port });
+                }
+                continue;
+            }
             injectedArgsObj[key] = val;
         } else {
-            if (!(isTest || isCheckOnly)) {
-                if (!scriptFound) {
-                    targetScriptPath = arg;
-                    scriptFound = true;
-                } else {
-                    injectedArgsObj["--"].push(arg);
-                }
-            } else if ((isTest || isCheckOnly) && !isSelfTest) {
-                testPaths.push(arg);
-                scriptFound = true;
-            } else if (isSelfTest) {
-                printSecurityFatal("The --self-test execution mode strictly forbids external file paths.");
-                sys.exit(1);
-            }
-        }
-    }
-
-    if (isTest || isCheckOnly) {
-        if (testPaths.length === 0) {
-            printUsageError("Usage: webrun [options] <script1.ts> ...\\nRun with --help for documentation.");
-            sys.exit(1);
-        }
-        targetScriptPath = testPaths;
-    } else if (!isEval && !isSelfTest && !isSelfCheck) {
-        if (!scriptFound) {
-            printUsageError("Usage: webrun [options] <script.ts> [args...]\\nRun with --help for documentation.");
-            sys.exit(1);
+            injectedArgsObj["--"].push(arg);
         }
     }
 
@@ -152,14 +154,19 @@ export function parseRawArguments(args: string[]): ParsedArgs {
         isEval,
         isCheckOnly,
         isNoCheck,
+        isServe,
+        serveInterfaces,
         evalCode,
         targetScriptPath: targetScriptPath!,
+        targetModule,
         sandboxArgs: rawArgs,
-        injectedArgsObj
+        injectedArgsObj,
+        filterPattern
     };
 }
 
-export function resolveExecutionMode(parsed: ParsedArgs): "run" | "test" | "eval" | "check-only" {
+export function resolveExecutionMode(parsed: ParsedArgs): "run" | "test" | "eval" | "check-only" | "serve" {
+    if (parsed.isServe) return "serve";
     if (parsed.isEval) return "eval";
     if (parsed.isTest) return "test";
     if (parsed.isCheckOnly) return "check-only";
@@ -167,222 +174,141 @@ export function resolveExecutionMode(parsed: ParsedArgs): "run" | "test" | "eval
 }
 
 export function buildNetworkFlags(allowedDomains: string[]): string[] {
-    const SSRF_BLOCK = "--deny-net=10.0.0.0/8,192.168.0.0/16,172.16.0.0/12,169.254.0.0/16";
-    const networkFlags: string[] = [];
-    if (allowedDomains.length > 0) {
-        networkFlags.push(`--allow-net=${allowedDomains.join(",")}`);
-        networkFlags.push(SSRF_BLOCK);
+    if (allowedDomains.length === 1 && allowedDomains[0] === "*") {
+        return ["--allow-net"];
+    } else if (allowedDomains.length > 0) {
+        return [`--allow-net=${allowedDomains.join(",")}`];
     } else {
-        networkFlags.push("--deny-net");
+        return ["--deny-net"];
     }
-    return networkFlags;
 }
 
-export function parseCommandInvocation(args: string[], config: WebrunConfig): CommandInvocation {
-    const parsed = parseRawArguments(args);
+export function parseCommandInvocation(args: string[], config: WebrunConfig, configDir: string): CommandInvocation;
+export function parseCommandInvocation(sys: ConfigRuntime, args: string[], config: WebrunConfig, configDir: string): CommandInvocation;
+export function parseCommandInvocation(sysOrArgs: ConfigRuntime | string[], argsOrConfig: string[] | WebrunConfig, configOrDir: WebrunConfig | string, maybeDir?: string): CommandInvocation {
+    const sys = Array.isArray(sysOrArgs) ? adaptGlobalRuntime() : sysOrArgs;
+    const args = Array.isArray(sysOrArgs) ? sysOrArgs : argsOrConfig as string[];
+    const config = Array.isArray(sysOrArgs) ? argsOrConfig as WebrunConfig : configOrDir as WebrunConfig;
+    const configDir = Array.isArray(sysOrArgs) ? configOrDir as string : maybeDir!;
+    const parsed = parseRawArguments(sys, args);
     const action = resolveExecutionMode(parsed);
     const networkFlags = buildNetworkFlags(config.permissions?.network || []);
+
+    let resolvedTarget = parsed.targetScriptPath;
+    let explicitOverride = false;
+    let additionalTargets: string[] | undefined;
+    // Unified Help/Version check:
+    const isHelpOrVersion = ["help", "h", "version", "v"].some(key => parsed.injectedArgsObj[key]);
+
+    if (!isHelpOrVersion && !parsed.isEval && !parsed.isSelfTest) {
+        // Additional future exclusive checks could go here if needed.
+    }
+
+    // Self-test: resolve the test harness module relative to this package.
+    if (parsed.isSelfTest) {
+        const selfUrl = new URL(import.meta.url);
+        const testHarnessUrl = selfUrl.pathname.endsWith(".ts")
+            ? new URL("../webrun.test.ts", import.meta.url)
+            : new URL("./webrun.test.ts", import.meta.url);
+        resolvedTarget = testHarnessUrl.protocol === "file:"
+            ? testHarnessUrl.pathname
+            : testHarnessUrl.href;
+        explicitOverride = true;
+    }
+
+    if (parsed.targetModule) {
+        resolvedTarget = parsed.targetModule;
+        explicitOverride = true;
+    }
+
+    // In test mode without --module, treat positional args as test module paths.
+    if (parsed.isTest && !explicitOverride && !parsed.isSelfTest) {
+        const positionalArgs: string[] = parsed.injectedArgsObj["--"] || [];
+        if (positionalArgs.length > 0) {
+            resolvedTarget = positionalArgs[0];
+            explicitOverride = true;
+            if (positionalArgs.length > 1) {
+                additionalTargets = positionalArgs.slice(1);
+            }
+            // Clear consumed positional args so they don't leak into user args.
+            parsed.injectedArgsObj["--"] = [];
+        }
+    }
+
+    // Implicit fallback evaluating the nearest webrun.json "module" field
+    if (!parsed.isEval && !parsed.isSelfTest && !parsed.isSelfCheck && !isHelpOrVersion) {
+        if (parsed.isServe && parsed.serveInterfaces.length === 0) {
+            let port = 0;
+            const portEnv = computeRuntimeEnvironment(sys, ["PORT"]).PORT;
+            if (portEnv && /^\d+$/.test(portEnv)) port = parseInt(portEnv, 10);
+            parsed.serveInterfaces.push({ host: "127.0.0.1", port });
+        }
+
+        if (!explicitOverride) {
+            if (parsed.isServe) {
+                if (config.serve) {
+                    resolvedTarget = resolve(configDir, config.serve);
+                } else if (config.module) {
+                    resolvedTarget = resolve(configDir, config.module);
+                } else {
+                    resolvedTarget = sys.cwd();
+                }
+            } else if (config.module) {
+                resolvedTarget = resolve(configDir, config.module);
+            } else {
+                throw new Error("No execution target specified.\\nProvide a targeting flag (--module), a positional target,\\nor define a 'module' entrypoint natively in your webrun.json file.");
+            }
+        }
+    }
+
+    // Validate that local file targets exist before booting the sandbox.
+    // Skip for URLs, eval, self-test, and directory-based serve targets.
+    if (resolvedTarget && !parsed.isEval && !parsed.isSelfTest && !isHelpOrVersion) {
+        const isUrl = resolvedTarget.startsWith("http://") || resolvedTarget.startsWith("https://") || resolvedTarget.startsWith("data:");
+        if (!isUrl) {
+            try {
+                const stat = sys.statSync(resolvedTarget);
+                if (stat.isDirectory && action !== "serve") {
+                    throw new Error(`The specified module '${resolvedTarget}' is a directory, not a file.`);
+                }
+            } catch (e: any) {
+                if (e.message?.includes("No such file")) {
+                    throw new Error(`The specified module '${resolvedTarget}' does not exist.`);
+                }
+                if (e.message?.includes("is a directory")) throw e;
+            }
+        }
+    }
 
     return {
         action,
         isSelfTest: parsed.isSelfTest,
-        targetScriptPath: parsed.targetScriptPath,
+        targetScriptPath: resolvedTarget,
         isNoCheck: parsed.isNoCheck,
         evalCode: parsed.evalCode,
         sandboxArgs: parsed.sandboxArgs,
         injectedArgsObj: parsed.injectedArgsObj,
-        networkFlags
+        networkFlags,
+        serveInterfaces: parsed.serveInterfaces,
+        filterPattern: parsed.filterPattern || undefined,
+        additionalTargets
     };
 }
 
-export function computeRuntimeEnvironment(allowedEnv: string[] = []): Record<string, string> {
+export function computeRuntimeEnvironment(sys: ConfigRuntime, allowedEnv: string[] = []): Record<string, string> {
     const finalEnvVars: Record<string, string> = {};
-    for (const k of allowedEnv) {
-        finalEnvVars[k] = sys.env.get(k) || "";
+    if (allowedEnv.length === 1 && allowedEnv[0] === "*") {
+        // Wildcard: inject all host environment variables.
+        const all = sys.env.toObject?.() ?? {};
+        for (const [k, v] of Object.entries(all)) {
+            finalEnvVars[k] = v as string;
+        }
+    } else {
+        for (const k of allowedEnv) {
+            finalEnvVars[k] = sys.env.get(k) || "";
+        }
     }
     return finalEnvVars;
-}
-
-export interface EnclavePolicy {
-    isPwdAllowed: boolean;
-    fallbackToTemp: boolean;
-    storageRoot: string;
-    allowedReadPaths: string[];
-    allowedWritePaths: string[];
-    allowedBindings: string[];
-}
-
-export function evaluateEnclavePolicy(configDirs: Record<string, { access: "read" | "write" }>, configBindings: string[], configDir: string, currentDir: string, isolatedTmp: string): EnclavePolicy {
-    let isPwdAllowed = false;
-    const fallbackToTemp = Object.keys(configDirs).length === 0;
-
-    const allowedReadPaths: string[] = [];
-    const allowedWritePaths: string[] = [];
-    const allowedBindings: string[] = [];
-
-    for (let [fsPath, settings] of Object.entries(configDirs)) {
-        if (fsPath.startsWith("~/")) {
-            fsPath = (sys.env.get("HOME") || "") + fsPath.slice(1);
-        }
-        
-        const absFsPath = resolve(configDir, fsPath);
-        if (currentDir === absFsPath || currentDir.startsWith(absFsPath + "/")) {
-            isPwdAllowed = true;
-        }
-
-        allowedReadPaths.push(absFsPath);
-        if (settings.access === "write") {
-            allowedWritePaths.push(absFsPath);
-        }
-    }
-
-    for (const bindingName of configBindings || []) {
-        allowedBindings.push(bindingName);
-    }
-
-    if (fallbackToTemp) {
-        allowedReadPaths.push(currentDir);
-    }
-
-    return {
-        isPwdAllowed,
-        fallbackToTemp,
-        allowedReadPaths,
-        allowedWritePaths,
-        storageRoot: fallbackToTemp ? isolatedTmp : currentDir,
-        allowedBindings
-    };
-}
-
-export function generateDenoStorageFlags(policy: EnclavePolicy, isolatedTmp: string, runnerTmp: string, opfsTmp: string, bindingSdksTmp: string, webrunEntryPath: string): string[] {
-    const unresolvedDir = dirname(webrunEntryPath);
-    const selfPath = tryRealpathSync(webrunEntryPath) || webrunEntryPath;
-    const r = [isolatedTmp, ...policy.allowedReadPaths, runnerTmp, opfsTmp, selfPath, webrunEntryPath, bindingSdksTmp];
-    
-    // Only grant read access to the surrounding source directory if running
-    // from the raw, unbundled source code (since it needs to dynamically import sibling .ts files).
-    // Bundled executables are self-contained and do not need read access to their directory.
-    if (webrunEntryPath.endsWith("/src/execution.ts") || webrunEntryPath.endsWith("\\src\\execution.ts")) {
-        const selfDir = tryRealpathSync(unresolvedDir) || unresolvedDir;
-        r.push(selfDir, unresolvedDir);
-    }
-
-    const w = [isolatedTmp, ...policy.allowedWritePaths, opfsTmp];
-    return [
-        `--allow-read=${r.join(",")}`,
-        `--allow-write=${w.join(",")}`
-    ];
-}
-
-export function generateSeatbeltEnclaveStrings(policy: EnclavePolicy, runnerTmp: string, opfsTmp: string, bindingSdksTmp: string, webrunEntryPath: string): { readEnclaves: string, writeEnclaves: string } {
-    let readEnclaves = "";
-    let writeEnclaves = "";
-
-    const selfPath = tryRealpathSync(webrunEntryPath) || webrunEntryPath;
-    readEnclaves += `\n    (subpath "${selfPath}")`;
-    
-    // Only grant read access to the surrounding source directory if running
-    // from the raw, unbundled source code (since it needs to dynamically import sibling .ts files).
-    // Bundled executables are self-contained and do not need read access to their directory.
-    if (webrunEntryPath.endsWith("/src/execution.ts") || webrunEntryPath.endsWith("\\src\\execution.ts")) {
-        const dirPath = dirname(selfPath);
-        readEnclaves += `\n    (subpath "${dirPath}")`;
-    }
-
-    for (const p of policy.allowedReadPaths) {
-        readEnclaves += `\n    (subpath "${p}")`;
-    }
-    readEnclaves += `\n    (subpath "${runnerTmp}")`;
-    readEnclaves += `\n    (subpath "${bindingSdksTmp}")`;
-
-    for (const p of policy.allowedWritePaths) {
-        writeEnclaves += `\n    (subpath "${p}")`;
-    }
-    writeEnclaves += `\n    (subpath "${opfsTmp}")`;
-
-    return { readEnclaves, writeEnclaves };
-}
-
-export function generateSeatbeltProfile(cwd: string, readEnclaves: string, writeEnclaves: string, ephemeralPorts: number[] = [], allowGpu: boolean = false): string {
-    let extraNetworkOutbound = "";
-    let extraNetworkInbound = "";
-    for (const port of ephemeralPorts) {
-        extraNetworkOutbound += `\n    (remote tcp "localhost:${port}")`;
-        extraNetworkInbound += `\n    (local tcp "*:${port}")\n    (local tcp "localhost:${port}")`;
-    }
-
-    let inboundBlock = "";
-    if (extraNetworkInbound) {
-        inboundBlock = `\n(allow network-inbound${extraNetworkInbound}\n)`;
-    }
-
-    return `(version 1)
-(deny default)
-(import "bsd.sb")
-(allow file-read-metadata)
-(allow signal)
-(allow system-fsctl)
-(deny process-exec)
-(deny process-fork)
-${allowGpu ? `
-(allow iokit-open)
-(allow file-issue-extension)
-(allow user-preference-read)` : ""}
-
-(allow file-read* (literal "${cwd}"))
-
-(allow process-exec
-    (literal (param "WEBRUN_EXEC_PATH"))
-)
-
-(allow file-read*
-    (subpath "/usr/lib")
-    (subpath "/usr/local/lib")
-    (subpath "/System/Library")
-    (subpath "/opt/homebrew")
-    (literal "/dev/random")
-    (literal "/dev/urandom")
-    (literal "/dev/null")
-    (literal "/dev/tty")
-    (literal "/etc/resolv.conf") 
-    (literal "/etc/hosts")       
-    (literal "/private/etc/resolv.conf") 
-    (literal "/private/etc/hosts")       
-    (literal "/private/etc/services")       
-    (literal "/private/var/run/mDNSResponder")
-)
-
-(allow file-read* file-map-executable
-    (subpath (param "WEBRUN_EXEC_DIR"))
-)
-
-(allow system-socket)
-(allow sysctl-read)
-(allow mach-lookup)
-(allow ipc-posix-shm)
-(allow network-outbound
-    (remote tcp "*:443")
-    (remote tcp "*:80")  
-    (remote udp "*:53")  
-    (literal "/private/var/run/mDNSResponder")${extraNetworkOutbound}
-)
-${inboundBlock}
-(allow file-read* file-write*
-    (subpath (param "WEBRUN_SANDBOX_CACHE"))
-    (subpath (param "WEBRUN_ISOLATED_TMP"))${allowGpu ? `\n    (regex #"^/private/var/folders/.*$")` : ""}${writeEnclaves}
-)
-
-(allow file-read*
-    (literal (param "WEBRUN_DENO_JSON"))
-    (literal (param "WEBRUN_DENO_JSONC"))
-    (literal (param "WEBRUN_DENO_LOCK"))
-    (literal (param "WEBRUN_SCRIPT_PATH"))${readEnclaves}
-)
-
-(deny file-read* file-write*
-    (regex #"^.*/\\.env.*$")
-)
-`;
 }
 
 export function generateBaseImportMap(): any {
@@ -396,11 +322,15 @@ export let dir = undefined;
 export let command = "";
 export let persisted = false;
 export let bindings = {};
+export let makeTempDir = undefined;
+export let upgradeWebSocket = undefined;
+export let tty = undefined;
 
 let isSet = false;
 let __rootUrl = "";
 let __parentPayload = null;
 let __webrunEntryUrl = "";
+let __originalWorker = null;
 
 export function set(ctx) {
     if (isSet) throw new Error("Security Error: webrun/ctx is already initialized");
@@ -412,9 +342,13 @@ export function set(ctx) {
     command = ctx.command || {};
     persisted = !!ctx.persisted;
     bindings = ctx.bindings || {};
+    makeTempDir = ctx.makeTempDir;
+    upgradeWebSocket = ctx.upgradeWebSocket;
+    tty = ctx.tty;
     __rootUrl = ctx.__internalRootUrl || "";
     __parentPayload = ctx.__parentPayload;
     __webrunEntryUrl = ctx.__webrunEntryUrl;
+    __originalWorker = ctx.__originalWorker;
 }
 
 export async function webrun(spawnArgs, options = {}) {
@@ -423,14 +357,16 @@ export async function webrun(spawnArgs, options = {}) {
     }
     return new Promise((resolve) => {
         const workerCode = \`
-            import { executeInsideSandbox, parseRawArguments } from "\${__webrunEntryUrl}";
+            import { executeInsideSandbox, parseCommandInvocation } from "\${__webrunEntryUrl}";
             
             self.onmessage = async (e) => {
                 if (e.data.type === "spawn") {
-                    const preservedDeno = globalThis.Deno;
-                    preservedDeno.exit = (code) => {
-                        self.postMessage({ type: "exit", code });
-                        self.close();
+                    const sys = {
+                        ...globalThis.Deno,
+                        exit: (code) => {
+                            self.postMessage({ type: "exit", code });
+                            self.close();
+                        }
                     };
                     
                     console.log = (...a) => { self.postMessage({ type: "stdout", chunk: a.map(String).join(" ") }); };
@@ -438,30 +374,33 @@ export async function webrun(spawnArgs, options = {}) {
                     
                     try {
                         const childPayload = e.data.payload;
-                        const parsed = parseRawArguments(childPayload.sandboxArgs);
-                        childPayload.injectedArgsObj = parsed.injectedArgsObj;
+                        const invocation = parseCommandInvocation(childPayload.sandboxArgs, childPayload.config || {}, childPayload.configDir || "");
                         
-                        // Construct targetUrlHref natively from parsed inputs
-                        childPayload.action = parsed.isEval ? "eval" : (parsed.isTest ? "test" : (parsed.isCheckOnly ? "check-only" : "run"));
-                        if (parsed.isEval) {
+                        childPayload.injectedArgsObj = invocation.injectedArgsObj;
+                        childPayload.action = invocation.action;
+                        if (invocation.action === "serve") {
+                            childPayload.serveInterfaces = invocation.serveInterfaces;
+                        }
+                        
+                        if (invocation.action === "eval") {
                             childPayload.targetScriptPath = "[eval]";
-                            childPayload.targetUrlHref = "data:application/typescript;charset=utf-8," + encodeURIComponent(parsed.evalCode);
-                            childPayload.evalCode = parsed.evalCode;
+                            childPayload.targetUrlHref = "data:application/typescript;charset=utf-8," + encodeURIComponent(invocation.evalCode);
+                            childPayload.evalCode = invocation.evalCode;
                         } else {
-                            childPayload.targetScriptPath = parsed.targetScriptPath;
+                            childPayload.targetScriptPath = invocation.targetScriptPath || "";
                             childPayload.evalCode = undefined;
                             
                             const rootUrl = childPayload.__internalRootUrl;
-                            const resolveUrl = (p) => p.startsWith("http") ? new URL(p).href : new URL(p, rootUrl).href;
-                            childPayload.targetUrlHref = Array.isArray(parsed.targetScriptPath)
-                                ? parsed.targetScriptPath.map(resolveUrl)
-                                : resolveUrl(parsed.targetScriptPath);
+                            const resolveUrl = (p) => {
+                                try { return new URL(p).href; } catch { return new URL(p, rootUrl).href; }
+                            };
+                            childPayload.targetUrlHref = resolveUrl(childPayload.targetScriptPath);
                         }
                         
-                        await executeInsideSandbox(childPayload);
+                        await executeInsideSandbox(sys, childPayload);
                     } catch (err) {
                         console.error(err.message || String(err));
-                        preservedDeno.exit(1);
+                        sys.exit(1);
                     }
                 }
             };
@@ -471,12 +410,12 @@ export async function webrun(spawnArgs, options = {}) {
         
         const workerOptions = { 
             type: "module", 
-            name: "webrun-sub-worker"
+            name: "webrun-sub-worker",
+            deno: { permissions: "inherit" }
         };
-        // Inherit parent constraints securely so the worker can load the webrun polyfill itself
-        workerOptions.deno = { permissions: "inherit" };
         
-        const worker = new Worker(blobUrl, workerOptions);
+        const WorkerConstructor = __originalWorker || Worker;
+        const worker = new WorkerConstructor(blobUrl, workerOptions);
         
         let stdout = "";
         let stderr = "";
@@ -506,9 +445,10 @@ export async function webrun(spawnArgs, options = {}) {
         }
         
         const childPayload = { ...__parentPayload };
+        delete (childPayload as any).__udpPort;
         childPayload.__internalRootUrl = __rootUrl;
         
-        // Do not mutate spawnArgs directly here, parseRawArguments needs the original structure
+        // webrunBin is inherited from the parent payload.
         childPayload.sandboxArgs = [...spawnArgs];
         if (options.memoryMB) childPayload.memoryMB = options.memoryMB;
         if (options.env) childPayload.finalEnvVars = options.env;
@@ -519,17 +459,47 @@ export async function webrun(spawnArgs, options = {}) {
 `;
     const contextURI = `data:application/typescript;charset=utf-8,${encodeURIComponent(contextCode)}`;
 
+    // Scope for the pre-compiled webrtc bundle: trusted internal code that
+    // needs real Node built-in access via Deno's compat layer.
+    const internalScopeUrl = new URL("./internal/", import.meta.url).href;
+
+    // The webrun entry itself (and its parent directory) need access to node
+    // builtins because the esbuild bundle inlines werift code that imports them.
+    // When running bundled, the entry is a temp .js file — its URL differs from
+    // the internal/ scope, so we need to whitelist it separately.
+    const selfUrl = import.meta.url;
+    const selfDirUrl = new URL("./", import.meta.url).href;
+
+    const nodePassthrough: Record<string, string> = {
+        "node:net": "node:net",
+        "node:os": "node:os",
+        "node:fs": "node:fs",
+        "node:path": "node:path",
+        "node:crypto": "node:crypto",
+        "node:events": "node:events",
+        "node:timers/promises": "node:timers/promises",
+        "node:tls": "node:tls",
+        "node:module": "node:module",
+        "node:perf_hooks": "node:perf_hooks",
+        "node:dgram": sinkholeURI,  // dgram stays blocked even for internals
+    };
+
     return {
         imports: {
             "webrun/ctx": contextURI,
             "node:fs": sinkholeURI,
             "node:child_process": sinkholeURI,
+            "node:dgram": sinkholeURI,
             "node:net": sinkholeURI,
             "node:os": sinkholeURI,
             "node:path": sinkholeURI,
             "node:vm": sinkholeURI,
         },
-        scopes: {}
+        scopes: {
+            [internalScopeUrl]: nodePassthrough,
+            [selfDirUrl]: nodePassthrough,
+            [selfUrl]: nodePassthrough,
+        }
     };
 }
 

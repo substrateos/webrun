@@ -1,0 +1,10 @@
+[
+  {
+    "name": "Obeys dynamic webrun.json allowlists",
+    "args": ["--module", "src/test.js"],
+    "expect": {
+      "exit_code": 0,
+      "stdout": [{"contains": "FETCH_ALLOWED"}]
+    }
+  }
+]

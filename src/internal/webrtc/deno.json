@@ -1,0 +1,6 @@
+{
+  "nodeModulesDir": "auto",
+  "imports": {
+    "werift": "npm:werift@0.22.9"
+  }
+}

@@ -1,0 +1,71 @@
+[
+  {
+    "name": "Dynamic Worker: echoes request body",
+    "args": ["--serve", "--module", "worker.js"],
+    "cwd": "site",
+    "signal": "SIGTERM",
+    "timeout_ms": 5000,
+    "expect": {
+      "exit_code": 0,
+      "ready": { "stdout": [{"contains": "Webrun serving at"}] },
+      "http": [
+        {
+          "method": "POST",
+          "path": "/echo",
+          "body": [{"contains": "hello from test"}],
+          "request_body": "hello from test",
+          "status": 200,
+          "headers": { "x-echo": "true" }
+        }
+      ]
+    }
+  },
+  {
+    "name": "Dynamic Worker: JSON route with method reflection",
+    "args": ["--serve", "--module", "worker.js"],
+    "cwd": "site",
+    "signal": "SIGTERM",
+    "timeout_ms": 5000,
+    "expect": {
+      "exit_code": 0,
+      "ready": { "stdout": [{"contains": "Webrun serving at"}] },
+      "http": [
+        {
+          "path": "/json",
+          "status": 200,
+          "headers": { "content-type": "application/json" },
+          "body": [{"contains": "\"method\":\"GET\""}, {"contains": "\"path\":\"/json\""}]
+        }
+      ]
+    }
+  },
+  {
+    "name": "Dynamic Worker: custom status codes",
+    "args": ["--serve", "--module", "worker.js"],
+    "cwd": "site",
+    "signal": "SIGTERM",
+    "timeout_ms": 5000,
+    "expect": {
+      "exit_code": 0,
+      "ready": { "stdout": [{"contains": "Webrun serving at"}] },
+      "http": [
+        { "path": "/status?code=201", "status": 201, "body": [{"contains": "status:201"}] },
+        { "path": "/status?code=418", "status": 418, "body": [{"contains": "status:418"}] }
+      ]
+    }
+  },
+  {
+    "name": "Dynamic Worker: 404 for unknown routes",
+    "args": ["--serve", "--module", "worker.js"],
+    "cwd": "site",
+    "signal": "SIGTERM",
+    "timeout_ms": 5000,
+    "expect": {
+      "exit_code": 0,
+      "ready": { "stdout": [{"contains": "Webrun serving at"}] },
+      "http": [
+        { "path": "/nonexistent", "status": 404, "body": [{"contains": "not found"}] }
+      ]
+    }
+  }
+]

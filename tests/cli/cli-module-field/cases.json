@@ -1,0 +1,5 @@
+[
+  { "name": "Executes webrun.json 'module' field implicitly without a target script argument", "args": [], "expect": { "exit_code": 0, "stdout": [{"contains": "IMPLICIT_MODULE_EXECUTED"}] } },
+  { "name": "--module flag explicitly overrides webrun.json 'module' heuristic", "args": ["--module=override.ts"], "expect": { "exit_code": 0, "stdout": [{"contains": "MODULE_OVERRIDE_EXECUTED"}] } },
+  { "name": "--module flag explicitly routes to a remote endpoint safely", "args": ["--module=data:application/javascript;base64,Y29uc29sZS5sb2coIlVSTF9PVkVSUklERV9FWEVDVVRFRCIpOw=="], "expect": { "exit_code": 0, "stdout": [{"contains": "URL_OVERRIDE_EXECUTED"}] } }
+]

@@ -1,0 +1,14 @@
+[
+  {
+    "name": "Runtime Subprocess Graceful Exit: Sandbox prints green early exit banner for bindings fulfilling their task",
+    "args": ["--module", "test.js"],
+    "expect": {
+      "exit_code": 0,
+      "stdout": [{"contains": "MIGRATION_PROXY_OK"}],
+      "stderr": [
+        {"contains": "[webrun binding: migrator]"},
+        {"contains": "Service exited gracefully (Code: 0)"}
+      ]
+    }
+  }
+]

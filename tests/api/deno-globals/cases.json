@@ -1,0 +1,3 @@
+[
+  { "name": "Does not inject Node capabilities or Deno native globals into the VM", "args": ["--module", "src/globals.js"], "expect": { "exit_code": 0, "stdout": [{"contains": "SECURE"}] } }
+]
