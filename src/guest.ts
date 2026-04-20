@@ -4,18 +4,15 @@ import { printExecutionError, printFatalError } from "./log.ts";
 import { SandboxContextPayload, GuestRuntime, adaptGlobalRuntime } from "./types.ts";
 import { createStorageManager } from "./fs.ts";
 import { createResilientStdinStream } from "./workarounds/deno/stdin.ts";
+import { runTestSuite } from "./test_harness.ts";
+import { parseCommandInvocation } from "./config.ts";
 
 
 // =========================================================
 // GUEST: Sandbox runtime setup and user code execution
 // =========================================================
 
-class WebrunSkipError extends Error {
-    constructor(msg: string) {
-        super(msg);
-        this.name = "WebrunSkipError";
-    }
-}
+
 
 class WebrunExitError extends Error {
     code: number;
@@ -26,130 +23,125 @@ class WebrunExitError extends Error {
     }
 }
 
-function createGuestTestContext(denoCtx: any, filterStr?: string): any {
-    return {
-        name: denoCtx.name,
-        async run(subName: string, subFn: Function) {
-            if (filterStr && !subName.includes(filterStr) && !denoCtx.name.includes(filterStr)) {
-                return; // Skip mismatching sub-test
-            }
-            await denoCtx.step(subName, async (subT: any) => {
-                await subFn(createGuestTestContext(subT, filterStr));
-            });
+/**
+ * Translation layer: bridges the legacy `testCapabilities` permission to the
+ * test-context object expected by un-migrated test files.
+ *
+ * Lifespan: remove once all tests under tests/ no longer reference `t.testsys`,
+ * `t.WORKER_BIN`, or `t.IS_REPACKED_TEST`. Track progress in:
+ * https://github.com/substrateos/webrun/issues/TBD
+ *
+ * DO NOT extend this function. New test helpers belong in webrun/ctx or the
+ * public TestContext interface, not here.
+ */
+function injectLegacyTestCapabilities(
+    t: any,
+    sys: GuestRuntime,
+    contextPayload: any,
+    payload: SandboxContextPayload,
+): void {
+    t.testsys = {
+        env: sys.env,
+        Command: sys.Command,
+        execPath: sys.execPath,
+        nativeFetch: contextPayload.__nativeFetch,
+        makeTempDirSync: sys.makeTempDirSync,
+        realPathSync: sys.realPathSync,
+        readTextFileSync: sys.readTextFileSync,
+        readFileSync: sys.readFileSync,
+        readDirSync: sys.readDirSync,
+        writeTextFileSync: sys.writeTextFileSync,
+        writeFileSync: sys.writeFileSync,
+        mkdirSync: sys.mkdirSync,
+        symlinkSync: sys.symlinkSync,
+        removeSync: sys.removeSync,
+        statSync: sys.statSync,
+        listen: sys.listen,
+        serve: sys.serve,
+        getFreePort: () => {
+            const l = sys.listen({ port: 0, hostname: "127.0.0.1" });
+            const port = l.addr.port;
+            l.close();
+            return port;
         },
-        log(...args: any[]) { console.log(...args); },
-        assert(cond: any, msg: string) { if (!cond) throw new Error(msg || "Assertion failed"); },
-        fail(msg: string) { throw new Error(msg || "Test failed explicitly"); },
-        skip(msg: string = "Skipped") {
-            console.log(`\x1b[33m[SKIP]\x1b[0m ${msg}`);
-            throw new WebrunSkipError(msg);
-        }
     };
+    t.WORKER_BIN = payload.webrunBin;
+    t.IS_REPACKED_TEST = payload.isRepackedTest;
 }
 
 async function executeTestPayload(sys: GuestRuntime, payload: SandboxContextPayload, contextPayload: any) {
     const targetUrls = [payload.targetUrlHref, ...(payload.additionalTargetUrls || [])];
     const targetPaths = [payload.targetScriptPath, ...(payload.additionalTargetPaths || [])];
 
-    const allTestExports: { name: string, fn: Function, scriptPath: string }[] = [];
+    // Collect exports grouped by source file, preserving declaration order.
+    const bySource = new Map<string, { name: string; fn: Function }[]>();
+    const seenNames = new Set<string>();
 
     for (let i = 0; i < targetUrls.length; i++) {
-        const url = targetUrls[i];
-        const mod = await import(url);
-        const scriptPath = targetPaths[i];
-        const testExports = Object.entries(mod).filter(([k, v]) => k.startsWith("test") && typeof v === "function");
-        for (const [name, fn] of testExports) {
-            allTestExports.push({ name, fn: fn as Function, scriptPath });
-        }
-    }
-
-    if (allTestExports.length === 0) {
-        console.warn("[Webrun] No test exports found. Expected functions starting with 'test'.");
-        return;
-    }
-
-    const webrunCtxMod = await import("webrun/ctx").catch(() => null);
-    if (webrunCtxMod && webrunCtxMod.set) {
-        webrunCtxMod.set(contextPayload);
-    }
-
-    const filterStr = payload.filterPattern;
-
-    // Determine if filter matches any top-level test export name.
-    // If so, apply top-level filtering (skip non-matching tests entirely).
-    // If not, treat as a sub-step filter only (all tests run, sub-steps filtered).
-    const hasTopLevelMatch = filterStr ? allTestExports.some(({ name }) => {
-        const clean = typeof name === 'string' ? (name.startsWith("test") ? name.substring(4).trim() : name) : String(name);
-        return clean.includes(filterStr) || name.includes(filterStr);
-    }) : false;
-
-    for (const { name, fn, scriptPath } of allTestExports) {
-        const cleanName = typeof name === 'string' ? (name.startsWith("test") ? name.substring(4).trim() : name) : String(name);
-
-        // Top-level filter: skip entire test registration when the filter
-        // matches a top-level name but this test doesn't match.
-        if (filterStr && hasTopLevelMatch && !cleanName.includes(filterStr) && !name.includes(filterStr)) {
-            continue;
-        }
-
-        sys.test({
-            name: cleanName,
-            sanitizeOps: false,
-            sanitizeResources: false,
-            sanitizeExit: false,
-            async fn(stepCtx: any) {
-                const guestT = createGuestTestContext(stepCtx, filterStr);
-                if (payload.isSelfTest) {
-                    (guestT as any).testsys = {
-                        env: sys.env,
-                        Command: sys.Command,
-                        execPath: sys.execPath,
-                        nativeFetch: contextPayload.__nativeFetch,
-                        makeTempDirSync: sys.makeTempDirSync,
-                        realPathSync: sys.realPathSync,
-                        readTextFileSync: sys.readTextFileSync,
-                        readFileSync: sys.readFileSync,
-                        readDirSync: sys.readDirSync,
-                        writeTextFileSync: sys.writeTextFileSync,
-                        writeFileSync: sys.writeFileSync,
-                        mkdirSync: sys.mkdirSync,
-                        symlinkSync: sys.symlinkSync,
-                        removeSync: sys.removeSync,
-                        statSync: sys.statSync,
-                        // listen/serve are exposed for mux.test.ts, which is an
-                        // in-process unit test that directly constructs mux proxies
-                        // and upstream servers. testsys is only populated in self-test
-                        // mode and never reaches production guest code.
-                        listen: sys.listen,
-                        serve: sys.serve,
-                        getFreePort: () => {
-                            const l = sys.listen({ port: 0, hostname: "127.0.0.1" });
-                            const port = l.addr.port;
-                            l.close();
-                            return port;
-                        }
-                    };
-                    (guestT as any).WORKER_BIN = payload.webrunBin;
-                    (guestT as any).IS_REPACKED_TEST = payload.isRepackedTest;
+        const mod = await import(targetUrls[i]);
+        const source = targetPaths[i];
+        if (!bySource.has(source)) bySource.set(source, []);
+        for (const [exportName, fn] of Object.entries(mod)) {
+            if (exportName.startsWith("test") && typeof fn === "function") {
+                const displayName = exportName.substring(4).trim() || exportName;
+                if (seenNames.has(displayName)) {
+                    console.warn(`[Webrun] Duplicate test name "${displayName}" — skipping duplicate registration.`);
+                    continue;
                 }
-                try {
-                    contextPayload.command = scriptPath;
-                    await fn(guestT, contextPayload);
-                } catch (err: any) {
-                    if (err instanceof WebrunSkipError || err?.name === "WebrunSkipError") {
-                        return;
-                    }
-                    throw err;
-                }
+                seenNames.add(displayName);
+                bySource.get(source)!.push({ name: displayName, fn: fn as Function });
             }
-        });
+        }
     }
+
+    if (seenNames.size === 0) {
+        console.warn("[Webrun] No test exports found. Expected functions starting with 'test'.");
+        throw new WebrunExitError(0);
+    }
+
+    const webrunCtxMod = await import("webrun/ctx").catch((err) => {
+        console.warn(`[Webrun] webrun/ctx failed to load — ctx will be unavailable: ${err?.message}`);
+        return null;
+    });
+    if (webrunCtxMod?.set) webrunCtxMod.set(contextPayload);
+
+    // console.log uses Deno.core.print() which is synchronous and unbuffered —
+    // it goes directly through the OS write() syscall without Tokio queuing.
+    // Deno.stdout.writable.write() is async and may batch; console.log is the
+    // correct choice for real-time test output.
+    const print = (line: string) => console.log(line);
+
+    let totalFailed = 0;
+    for (const [source, exports] of bySource) {
+        const tests = exports.map(({ name, fn }) => ({
+            name,
+            fn: async (t: any, ctx: any) => {
+                if (payload.testCapabilities) injectLegacyTestCapabilities(t, sys, contextPayload, payload);
+                await fn(t, ctx);
+            },
+        }));
+        // When filtering across multiple source files, skip sources that have
+        // no matching test names — prevents unrelated sources from running
+        // through the sub-step passthrough path.
+        if (payload.filterPattern && bySource.size > 1) {
+            const hasMatch = tests.some(({ name }) => name.includes(payload.filterPattern!));
+            if (!hasMatch) continue;
+        }
+        const { failed } = await runTestSuite(tests, contextPayload, source, print, payload.filterPattern);
+        totalFailed += failed;
+    }
+
+    sys.exit(totalFailed > 0 ? 1 : 0);
 }
+
 
 async function executeRunPayload(sys: GuestRuntime, payload: SandboxContextPayload, contextPayload: any) {
     contextPayload.command = payload.targetScriptPath;
 
-    const webrunCtxMod = await import("webrun/ctx").catch(() => null);
+    const webrunCtxMod = await import("webrun/ctx").catch((err) => {
+        console.warn(`[Webrun] webrun/ctx failed to load — ctx will be unavailable: ${err?.message}`);
+        return null;
+    });
     if (webrunCtxMod && webrunCtxMod.set) {
         webrunCtxMod.set(contextPayload);
     }
@@ -183,7 +175,6 @@ const rewritePermissionError = (msg: string): string => {
 
 function setupSandboxErrorHandlers(sys: GuestRuntime) {
     globalThis.addEventListener('unhandledrejection', (e: any) => {
-        if (e.reason && e.reason.name === "WebrunSkipError") return;
         if (e.reason?.name === "WebrunExitError") {
             e.preventDefault();
             sys.exit(e.reason.code);
@@ -483,6 +474,8 @@ interface GuestCaptures {
     OriginalWorker: any;
     storageManager: any;
     FileSystemDirectoryHandle: any;
+    /** Resolves a FileSystemHandle to its absolute path. */
+    resolvePath: (h: any) => string | undefined;
     stdinIsTerminal: boolean;
     stdinSetRaw: ((raw: boolean, opts?: { cbreak: boolean }) => void) | null;
     getConsoleSize: (() => { columns: number; rows: number }) | null;
@@ -515,10 +508,8 @@ async function buildContextPayload(
         persisted: !payload.fallbackToTemp,
         bindings: Object.fromEntries(Object.entries(payload.bindingsMap || {}).map(([k, _v]: any) => [k, 'webrun://' + k])),
         __internalRootUrl: `file://${payload.storageRoot}/`,
-        __parentPayload: payload,
-        __webrunEntryUrl: resolveWebrunEntryUrl(import.meta.url),
         __nativeFetch: nativeFetch,
-        __originalWorker: OriginalWorker,
+        __resolvePath: captures.resolvePath,
         stdin: createResilientStdinStream(sys.stdin),
         stdout: sys.stdout?.writable || null,
         stderr: sys.stderr?.writable || null,
@@ -549,6 +540,148 @@ async function buildContextPayload(
     };
 }
 
+// =========================================================
+// SPAWN ORCHESTRATOR
+// =========================================================
+//
+// Handles ctx.webrun() spawn requests from post-scrub user code via
+// a MessageChannel. Runs on port1 (the orchestrator side). User code
+// posts requests through port2.
+//
+// This function captures Worker, parseCommandInvocation, and the
+// entry URL BEFORE the global scrub — these are the "retained
+// authorities" that user code cannot access directly.
+
+function createSpawnChild(
+    CapturedWorker: any,
+    entryUrl: string,
+    parentPayload: SandboxContextPayload,
+    sys: any,
+): (spawnArgs: string[], options?: any) => Promise<any> {
+    return (spawnArgs: string[], options: any = {}): Promise<any> => {
+        return new Promise((resolve) => {
+        let blobUrl: string | undefined;
+        try {
+        // Build child payload from the parent's payload.
+        const childPayload: any = { ...parentPayload };
+        delete childPayload.__udpPort;
+        childPayload.__internalRootUrl = `file://${parentPayload.storageRoot}/`;
+        childPayload.sandboxArgs = [...spawnArgs];
+        if (options?.memoryMB) childPayload.memoryMB = options.memoryMB;
+        if (options?.env) childPayload.finalEnvVars = options.env;
+        if (options?.cwdPath) {
+            childPayload.storageRoot = options.cwdPath;
+            childPayload.fallbackToTemp = false;
+        }
+
+        // Parse the command invocation (retained authority — not
+        // available to post-scrub code).
+        const invocation = parseCommandInvocation(
+            sys,
+            childPayload.sandboxArgs,
+            childPayload.config || {},
+            childPayload.configDir || "",
+        );
+        childPayload.injectedArgsObj = invocation.injectedArgsObj;
+        childPayload.action = invocation.action;
+        if (invocation.filterPattern) childPayload.filterPattern = invocation.filterPattern;
+        if (invocation.action === "serve") childPayload.serveInterfaces = invocation.serveInterfaces;
+        if (invocation.action === "eval") {
+            childPayload.targetScriptPath = "[eval]";
+            childPayload.targetUrlHref = "data:application/typescript;charset=utf-8," + encodeURIComponent(invocation.evalCode!);
+            childPayload.evalCode = invocation.evalCode;
+        } else {
+            childPayload.targetScriptPath = invocation.targetScriptPath || "";
+            childPayload.evalCode = undefined;
+            const rootUrl = childPayload.__internalRootUrl;
+            const resolveUrl = (p: string) => {
+                try { return new URL(p).href; }
+                catch { return new URL(p, rootUrl).href; }
+            };
+            childPayload.targetUrlHref = resolveUrl(childPayload.targetScriptPath);
+            if (invocation.additionalTargets?.length) {
+                childPayload.additionalTargetPaths = invocation.additionalTargets;
+                childPayload.additionalTargetUrls = invocation.additionalTargets.map(resolveUrl);
+            }
+        }
+
+        // Create the child Worker (retained authority — CapturedWorker
+        // was saved before the global scrub deleted globalThis.Worker).
+        const workerCode = `
+            import { executeInsideSandbox } from "${entryUrl}";
+            self.onmessage = async (e) => {
+                if (e.data.type === "spawn") {
+                    const sys = { ...globalThis.Deno, exit: (code) => { self.postMessage({ type: "exit", code }); self.close(); } };
+                    console.log = (...a) => { self.postMessage({ type: "stdout", chunk: a.map(String).join(" ") }); };
+                    console.error = (...a) => { self.postMessage({ type: "stderr", chunk: a.map(String).join(" ") }); };
+                    try {
+                        await executeInsideSandbox(sys, e.data.payload);
+                    } catch (err) {
+                        console.error(err.message || String(err));
+                        sys.exit(1);
+                    }
+                }
+            };
+        `;
+
+                blobUrl = URL.createObjectURL(new Blob([workerCode], { type: "application/javascript" }));
+                const worker = new CapturedWorker(blobUrl, { type: "module", name: "webrun-sub-worker", deno: { permissions: "inherit" } });
+
+                let stdoutBuf = "";
+                let stderrBuf = "";
+                let settled = false;
+
+                function finish(exitCode: number, extraStderr?: string) {
+                    if (settled) return;
+                    settled = true;
+                    URL.revokeObjectURL(blobUrl!);
+                    if (extraStderr) stderrBuf += extraStderr;
+                    resolve({ exitCode, stdout: stdoutBuf, stderr: stderrBuf });
+                }
+
+                worker.onmessage = (we: MessageEvent) => {
+                    if (we.data.type === "stdout") {
+                        stdoutBuf += we.data.chunk + "\n";
+                        if (options?.onStdout) options.onStdout(we.data.chunk);
+                        if (options?.stdout === "inherit") console.log(we.data.chunk);
+                    } else if (we.data.type === "stderr") {
+                        stderrBuf += we.data.chunk + "\n";
+                        if (options?.onStderr) options.onStderr(we.data.chunk);
+                        if (options?.stderr === "inherit") console.error(we.data.chunk);
+                    } else if (we.data.type === "exit") {
+                        finish(we.data.code);
+                    }
+                };
+                worker.onerror = (err: any) => {
+                    finish(1, "\n" + (err.message || String(err)));
+                };
+
+                // Handle abort.
+                if (options.abort) {
+                    options.abort.then(() => {
+                        worker.terminate();
+                        finish(143);
+                    });
+                }
+
+                // Handle timeout.
+                if (options.timeoutMillis) {
+                    setTimeout(() => {
+                        worker.terminate();
+                        finish(143, "\nTimeout limit reached");
+                    }, options.timeoutMillis);
+                }
+
+                // Start the child.
+                worker.postMessage({ type: "spawn", payload: childPayload });
+        } catch (err: any) {
+            if (blobUrl) URL.revokeObjectURL(blobUrl);
+            resolve({ exitCode: 1, stdout: "", stderr: err.message || String(err) });
+        }
+        });
+    };
+}
+
 export async function executeInsideSandbox(payload: SandboxContextPayload): Promise<void>;
 export async function executeInsideSandbox(sys: GuestRuntime, payload: SandboxContextPayload): Promise<void>;
 export async function executeInsideSandbox(sysOrPayload: GuestRuntime | SandboxContextPayload, maybePayload?: SandboxContextPayload) {
@@ -559,7 +692,7 @@ export async function executeInsideSandbox(sysOrPayload: GuestRuntime | SandboxC
     const flags = { ...rawArgs };
     delete flags["--"];
 
-    const { manager: storageManager, FileSystemDirectoryHandle } = createStorageManager(sys, payload.storageRoot, payload.fallbackToTemp);
+    const { manager: storageManager, FileSystemDirectoryHandle, resolvePath } = createStorageManager(sys, payload.storageRoot, payload.fallbackToTemp);
 
     // Capture primitives before the global wipe. These are bundled into
     // GuestCaptures and threaded to buildContextPayload.
@@ -572,6 +705,7 @@ export async function executeInsideSandbox(sysOrPayload: GuestRuntime | SandboxC
         OriginalWorker: (globalThis as any).Worker,
         storageManager,
         FileSystemDirectoryHandle,
+        resolvePath,
         stdinIsTerminal,
         stdinSetRaw: stdinIsTerminal
             ? (raw: boolean, opts?: { cbreak: boolean }) => sys.stdin.setRaw(raw, opts)
@@ -612,6 +746,16 @@ export async function executeInsideSandbox(sysOrPayload: GuestRuntime | SandboxC
 
     }
 
+    // --- Spawn orchestrator ---
+    // Capture everything the orchestrator needs BEFORE the global scrub.
+    // After scrubNonWebGlobals(), Deno, Worker, and other platform APIs
+    // are gone from globalThis. The closure retains references to
+    // create child Workers on behalf of post-scrub user code.
+    const CapturedWorker = captures.OriginalWorker;
+    const capturedEntryUrl = resolveWebrunEntryUrl(import.meta.url);
+
+    const spawnChild = createSpawnChild(CapturedWorker, capturedEntryUrl, payload, sys);
+
     scrubNonWebGlobals();
 
     try {
@@ -620,6 +764,10 @@ export async function executeInsideSandbox(sysOrPayload: GuestRuntime | SandboxC
         const contextPayload = await buildContextPayload(
             sys, payload, argsPayload, flags, captures, signal,
         );
+
+        // Pass the spawn function into the context so ctx.webrun()
+        // can invoke it directly.
+        contextPayload.__spawnChild = spawnChild;
 
         try {
             if (payload.action === "test") {

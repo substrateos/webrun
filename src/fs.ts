@@ -297,7 +297,7 @@ export function createStorageModule(sys: StorageRuntime) {
         }
     }
 
-    return { FileSystemDirectoryHandle, FileSystemFileHandle };
+    return { FileSystemDirectoryHandle, FileSystemFileHandle, resolvePath: _getPath };
 }
 
 /** Return type of createStorageModule — avoids repeating the full signature. */

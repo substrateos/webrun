@@ -65,7 +65,6 @@ async function buildSandboxExecutionConfig(
 
     const payloadObject: SandboxContextPayload = {
         action: invocation.action,
-        isSelfTest: invocation.isSelfTest,
         webrunBin: sys.env.get("WEBRUN_BIN") || sys.execPath(),
         isRepackedTest: sys.env.get("WEBRUN_IS_REPACKED_TEST") === "1",
         storageRoot: policy.storageRoot,
@@ -77,6 +76,7 @@ async function buildSandboxExecutionConfig(
         evalCode: invocation.evalCode,
         sandboxArgs: invocation.sandboxArgs,
         opfsRoot: opfsTmp,
+        testCapabilities: !!(config.permissions as any)?.testCapabilities,
         memoryMB: config.limits?.memoryMB,
         bindingsMap: bindingsMap || {},
         allowedBindings: policy.allowedBindings,
@@ -93,25 +93,37 @@ async function buildSandboxExecutionConfig(
 
     // Compute the jail config — the landlockPolicy needs to be
     // serialized into the payload before it's written to disk.
-    const jailOs = invocation.isSelfTest ? "none" : sys.build.os;
+    const jailOs = sys.build.os;
 
     // payloadPath is a deterministic string — buildRuntimeArgs appends it
     // as a CLI argument but never reads the file.
     const payloadPath = resolve(runnerTmp, "sandbox_payload.json");
 
-    const innerRuntimeArgs = buildRuntimeArgs(
-        sys, invocation, MAX_V8_MEM_MB, importMapPath, ephemeralPorts,
-        policy, paths, payloadPath, jailOs
-    );
+    // @deprecated Legacy bridge: when testCapabilities is set, the webrun binary
+    // path is threaded through to both the Deno permission layer (--allow-run)
+    // and the macOS seatbelt (process-exec, process-fork).
+    const legacyRunBin = payloadObject.testCapabilities ? payloadObject.webrunBin : undefined;
+
+    const innerRuntimeArgs = buildRuntimeArgs({
+        sys, invocation, maxV8MemMB: MAX_V8_MEM_MB, importMapPath, ephemeralPorts,
+        policy, paths, payloadPath, os: jailOs,
+        envPermissions: config.permissions?.env || [],
+        legacyRunBin,
+    });
 
     const jail = buildJailConfig(
         sys, jailOs, policy, innerRuntimeArgs,
         paths, ephemeralPorts, !!config.permissions?.gpu,
         (config.permissions?.network?.length ?? 0) > 0,
+        legacyRunBin,
     );
 
     // Attach optionally-present Landlock policy, then write once.
-    if (jail.landlockPolicy) {
+    // @deprecated Legacy bridge: skip Landlock when testCapabilities is set.
+    // Landlock restrictions are inherited by child processes, so the child
+    // webrun process spawned by testsys.Command would fail. Deno's --allow-run
+    // provides sufficient security for self-test mode.
+    if (jail.landlockPolicy && !legacyRunBin) {
         payloadObject.landlockPolicy = jail.landlockPolicy;
     }
     sys.writeTextFileSync(payloadPath, JSON.stringify(payloadObject));
@@ -119,16 +131,12 @@ async function buildSandboxExecutionConfig(
     const { baseCmd, execArgs } = jail;
 
     const envVars = { ...payloadObject.finalEnvVars };
-    if (invocation.isSelfTest) {
-        if (payloadObject.webrunBin) envVars["WEBRUN_BIN"] = payloadObject.webrunBin;
-        envVars["WEBRUN_IS_REPACKED_TEST"] = payloadObject.isRepackedTest ? "1" : "0";
-        envVars["WEBRUN_DENO_DIR"] = dirname(sys.execPath());
-    }
 
     const cmdOptions: CommandOptions = {
         args: execArgs,
         env: {
             ...envVars,
+            ...jail.extraEnv,
             "HOME": isolatedTmp,
             "TMPDIR": isolatedTmp,
             "PATH": "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin",
@@ -461,7 +469,12 @@ function resolveOpfsStorage(
                     stdout: "piped",
                     stderr: "piped",
                     clearEnv: true,
-                    env: { "HOME": sys.env.get("HOME") || "/tmp", "PATH": "/usr/bin:/bin" }
+                    env: {
+                        "HOME": sys.env.get("HOME") || "/tmp",
+                        "PATH": "/usr/bin:/bin",
+                        "GIT_CONFIG_GLOBAL": "/dev/null",
+                        "GIT_CONFIG_NOSYSTEM": "1",
+                    }
                 });
             } else {
                 cmd = new sys.Command("/usr/bin/git", {
@@ -470,15 +483,22 @@ function resolveOpfsStorage(
                     stdout: "piped",
                     stderr: "piped",
                     clearEnv: true,
-                    env: { "HOME": sys.env.get("HOME") || "/tmp", "PATH": "/usr/bin:/bin" }
+                    env: {
+                        "HOME": sys.env.get("HOME") || "/tmp",
+                        "PATH": "/usr/bin:/bin",
+                        "GIT_CONFIG_GLOBAL": "/dev/null",
+                        "GIT_CONFIG_NOSYSTEM": "1",
+                    }
                 });
             }
             const out = cmd.outputSync();
-            if (out.code !== 0) throw new Error("git failed");
+            const gitStderr = new TextDecoder().decode(out.stderr).trim();
+            if (out.code !== 0) throw new Error(`git exited ${out.code}: ${gitStderr}`);
             opfsId = new TextDecoder().decode(out.stdout).trim().split("\n")[0];
-            if (!opfsId) throw new Error("No git commit");
+            if (!opfsId) throw new Error("No git commit found (empty rev-list output)");
         } catch (err: any) {
-            printFatalError("Configuration Error", "The 'git' OPFS origin strategy requires a valid git repository.");
+            printFatalError("Configuration Error",
+                `The 'git' OPFS origin strategy requires a valid git repository.\n  detail: ${err?.message ?? err}`);
             sys.exit(1);
         }
     } else {
@@ -518,7 +538,7 @@ export async function spawnSandboxProcess(sys: HostRuntime, cwd: string, args: s
     const argsCopy = args.slice();
     const peekedArgs = parseRawArguments(sys, argsCopy);
     let configResolveDir = cwd;
-    if (!peekedArgs.isEval && !peekedArgs.isSelfTest) {
+    if (!peekedArgs.isEval) {
         let explicitPath = "";
         if (peekedArgs.targetModule && !peekedArgs.targetModule.startsWith("http")) explicitPath = peekedArgs.targetModule;
         else if (peekedArgs.targetScriptPath && peekedArgs.targetScriptPath !== "") explicitPath = peekedArgs.targetScriptPath;
@@ -556,7 +576,14 @@ export async function spawnSandboxProcess(sys: HostRuntime, cwd: string, args: s
             throw e;
         }
     }
-    const policy = evaluateEnclavePolicy(sys, config.permissions?.storage || {}, config.permissions?.bindings || [], configDir, cwd, isolatedTmp);
+    // When the config was discovered via script-path resolution into a
+    // subdirectory (configDir is below projectRoot), the sandbox CWD scope
+    // should follow the config. When the config is ABOVE the CWD (child
+    // process running from a subdirectory), preserve the actual CWD so
+    // storage path containment checks work correctly.
+    const configBelowCwd = configFound && configDir.startsWith(projectRoot + "/");
+    const effectiveCwd = configBelowCwd ? configDir : cwd;
+    const policy = evaluateEnclavePolicy(sys, config.permissions?.storage || {}, config.permissions?.bindings || [], configDir, effectiveCwd, isolatedTmp);
 
     const protectedFiles: string[] = [...configPaths, ...importMapPaths];
 

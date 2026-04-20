@@ -1,0 +1,9 @@
+{
+    "limits": { "timeoutMillis": 120000 },
+    "permissions": {
+        "storage": { ".": { "access": "read" } },
+        "network": ["127.0.0.1", "0.0.0.0"],
+        "env": ["HOME", "WEBRUN_BIN", "WEBRUN_IS_REPACKED_TEST", "WEBRUN_DENO_DIR", "WEBRUN_VERSION", "TMP_DIR"],
+        "testCapabilities": true
+    }
+}

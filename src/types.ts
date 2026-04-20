@@ -58,7 +58,6 @@ export interface LandlockPolicy {
 /** Parsed result of CLI argument routing. */
 export interface CommandInvocation {
     action: "run" | "test" | "eval" | "check-only" | "serve";
-    isSelfTest?: boolean;
     targetScriptPath: string;
     targetModule?: string;
     evalCode?: string;
@@ -79,9 +78,15 @@ export interface CommandInvocation {
  */
 export interface SandboxContextPayload {
     action: "run" | "test" | "eval" | "check-only" | "serve";
-    isSelfTest?: boolean;
-    /** Absolute path to the webrun binary (for child spawning). */
+    /**
+     * @deprecated Legacy compat. Consumed only by injectLegacyTestCapabilities().
+     * Remove alongside testCapabilities when tests are migrated to webrun/ctx.
+     */
     webrunBin?: string;
+    /**
+     * @deprecated Legacy compat. Consumed only by injectLegacyTestCapabilities().
+     * Remove alongside testCapabilities when tests are migrated to webrun/ctx.
+     */
     isRepackedTest?: boolean;
     isSelfCheck?: boolean;
     /** Absolute path to the host directory mapped as ctx.dir. */
@@ -97,6 +102,12 @@ export interface SandboxContextPayload {
     sandboxArgs: string[];
     /** Absolute path to the OPFS root (ephemeral or persistent). */
     opfsRoot: string;
+    /**
+     * @deprecated Translation-layer compat flag. Causes injectLegacyTestCapabilities()
+     * in guest.ts to expose raw sys primitives as t.testsys on the test context.
+     * Remove once all tests under tests/ are migrated to webrun/ctx APIs.
+     */
+    testCapabilities?: boolean;
     memoryMB?: number;
     bindingsMap: Record<string, BindingEntry>;
     allowedBindings: string[];
@@ -187,7 +198,7 @@ export type StorageRuntime = Pick<typeof Deno,
 /** guest.ts — sandbox interior: globals, signals, test harness, ctx object. */
 export type GuestRuntime = Pick<typeof Deno,
     'exit' | 'memoryUsage' | 'addSignalListener' | 'stdin' | 'stdout' | 'stderr' |
-    'consoleSize' | 'test' | 'Command' | 'execPath' | 'listen' | 'serve' |
+    'consoleSize' | 'Command' | 'execPath' | 'listen' | 'serve' |
     'upgradeWebSocket' | 'readTextFileSync' | 'readFileSync' | 'readDirSync' |
     'writeTextFileSync' | 'writeFileSync' | 'mkdirSync' | 'makeTempDirSync' |
     'symlinkSync' | 'removeSync' | 'statSync' | 'realPathSync' |

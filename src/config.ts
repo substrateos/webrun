@@ -63,12 +63,21 @@ export function parseRawArguments(sysOrArgs: ConfigRuntime | string[], maybeArgs
     const selfTestIdx = rawArgs.findIndex(a => a === "--self-test" || a.startsWith("--self-test="));
     if (selfTestIdx !== -1) {
         isTest = true;
-        isSelfTest = true;
         const selfTestArg = rawArgs[selfTestIdx];
         if (selfTestArg.startsWith("--self-test=")) {
             filterPattern = selfTestArg.slice("--self-test=".length);
         }
         rawArgs.splice(selfTestIdx, 1);
+        isSelfTest = true;
+
+        // Resolve the test harness module relative to this package.
+        const selfUrl = new URL(import.meta.url);
+        const testHarnessUrl = selfUrl.pathname.endsWith(".ts")
+            ? new URL("../tests/webrun.test.ts", import.meta.url)
+            : new URL("./tests/webrun.test.ts", import.meta.url);
+        targetScriptPath = testHarnessUrl.protocol === "file:"
+            ? testHarnessUrl.pathname
+            : testHarnessUrl.href;
     }
 
     const testIdx = rawArgs.findIndex(a => a === "--test" || a.startsWith("--test="));
@@ -200,21 +209,12 @@ export function parseCommandInvocation(sysOrArgs: ConfigRuntime | string[], args
     // Unified Help/Version check:
     const isHelpOrVersion = ["help", "h", "version", "v"].some(key => parsed.injectedArgsObj[key]);
 
-    if (!isHelpOrVersion && !parsed.isEval && !parsed.isSelfTest) {
+    if (!isHelpOrVersion && !parsed.isEval) {
         // Additional future exclusive checks could go here if needed.
     }
 
-    // Self-test: resolve the test harness module relative to this package.
-    if (parsed.isSelfTest) {
-        const selfUrl = new URL(import.meta.url);
-        const testHarnessUrl = selfUrl.pathname.endsWith(".ts")
-            ? new URL("../webrun.test.ts", import.meta.url)
-            : new URL("./webrun.test.ts", import.meta.url);
-        resolvedTarget = testHarnessUrl.protocol === "file:"
-            ? testHarnessUrl.pathname
-            : testHarnessUrl.href;
-        explicitOverride = true;
-    }
+    // --self-test already resolved the target in parseRawArguments.
+    const isSelfTest = parsed.isSelfTest;
 
     if (parsed.targetModule) {
         resolvedTarget = parsed.targetModule;
@@ -222,7 +222,7 @@ export function parseCommandInvocation(sysOrArgs: ConfigRuntime | string[], args
     }
 
     // In test mode without --module, treat positional args as test module paths.
-    if (parsed.isTest && !explicitOverride && !parsed.isSelfTest) {
+    if (parsed.isTest && !explicitOverride && !isSelfTest) {
         const positionalArgs: string[] = parsed.injectedArgsObj["--"] || [];
         if (positionalArgs.length > 0) {
             resolvedTarget = positionalArgs[0];
@@ -236,7 +236,7 @@ export function parseCommandInvocation(sysOrArgs: ConfigRuntime | string[], args
     }
 
     // Implicit fallback evaluating the nearest webrun.json "module" field
-    if (!parsed.isEval && !parsed.isSelfTest && !parsed.isSelfCheck && !isHelpOrVersion) {
+    if (!parsed.isEval && !isSelfTest && !parsed.isSelfCheck && !isHelpOrVersion) {
         if (parsed.isServe && parsed.serveInterfaces.length === 0) {
             let port = 0;
             const portEnv = computeRuntimeEnvironment(sys, ["PORT"]).PORT;
@@ -263,7 +263,7 @@ export function parseCommandInvocation(sysOrArgs: ConfigRuntime | string[], args
 
     // Validate that local file targets exist before booting the sandbox.
     // Skip for URLs, eval, self-test, and directory-based serve targets.
-    if (resolvedTarget && !parsed.isEval && !parsed.isSelfTest && !isHelpOrVersion) {
+    if (resolvedTarget && !parsed.isEval && !isSelfTest && !isHelpOrVersion) {
         const isUrl = resolvedTarget.startsWith("http://") || resolvedTarget.startsWith("https://") || resolvedTarget.startsWith("data:");
         if (!isUrl) {
             try {
@@ -282,7 +282,6 @@ export function parseCommandInvocation(sysOrArgs: ConfigRuntime | string[], args
 
     return {
         action,
-        isSelfTest: parsed.isSelfTest,
         targetScriptPath: resolvedTarget,
         isNoCheck: parsed.isNoCheck,
         evalCode: parsed.evalCode,
@@ -325,12 +324,11 @@ export let bindings = {};
 export let makeTempDir = undefined;
 export let upgradeWebSocket = undefined;
 export let tty = undefined;
+export let exit = undefined;
+export let __resolvePath = undefined;
 
 let isSet = false;
-let __rootUrl = "";
-let __parentPayload = null;
-let __webrunEntryUrl = "";
-let __originalWorker = null;
+let __spawnChild = null;
 
 export function set(ctx) {
     if (isSet) throw new Error("Security Error: webrun/ctx is already initialized");
@@ -345,116 +343,69 @@ export function set(ctx) {
     makeTempDir = ctx.makeTempDir;
     upgradeWebSocket = ctx.upgradeWebSocket;
     tty = ctx.tty;
-    __rootUrl = ctx.__internalRootUrl || "";
-    __parentPayload = ctx.__parentPayload;
-    __webrunEntryUrl = ctx.__webrunEntryUrl;
-    __originalWorker = ctx.__originalWorker;
+    exit = ctx.exit;
+    __spawnChild = ctx.__spawnChild || null;
+    __resolvePath = ctx.__resolvePath || null;
 }
 
 export async function webrun(spawnArgs, options = {}) {
     if (spawnArgs.includes("--test")) {
         throw new Error("not yet implemented");
     }
-    return new Promise((resolve) => {
-        const workerCode = \`
-            import { executeInsideSandbox, parseCommandInvocation } from "\${__webrunEntryUrl}";
-            
-            self.onmessage = async (e) => {
-                if (e.data.type === "spawn") {
-                    const sys = {
-                        ...globalThis.Deno,
-                        exit: (code) => {
-                            self.postMessage({ type: "exit", code });
-                            self.close();
-                        }
-                    };
-                    
-                    console.log = (...a) => { self.postMessage({ type: "stdout", chunk: a.map(String).join(" ") }); };
-                    console.error = (...a) => { self.postMessage({ type: "stderr", chunk: a.map(String).join(" ") }); };
-                    
-                    try {
-                        const childPayload = e.data.payload;
-                        const invocation = parseCommandInvocation(childPayload.sandboxArgs, childPayload.config || {}, childPayload.configDir || "");
-                        
-                        childPayload.injectedArgsObj = invocation.injectedArgsObj;
-                        childPayload.action = invocation.action;
-                        if (invocation.action === "serve") {
-                            childPayload.serveInterfaces = invocation.serveInterfaces;
-                        }
-                        
-                        if (invocation.action === "eval") {
-                            childPayload.targetScriptPath = "[eval]";
-                            childPayload.targetUrlHref = "data:application/typescript;charset=utf-8," + encodeURIComponent(invocation.evalCode);
-                            childPayload.evalCode = invocation.evalCode;
-                        } else {
-                            childPayload.targetScriptPath = invocation.targetScriptPath || "";
-                            childPayload.evalCode = undefined;
-                            
-                            const rootUrl = childPayload.__internalRootUrl;
-                            const resolveUrl = (p) => {
-                                try { return new URL(p).href; } catch { return new URL(p, rootUrl).href; }
-                            };
-                            childPayload.targetUrlHref = resolveUrl(childPayload.targetScriptPath);
-                        }
-                        
-                        await executeInsideSandbox(sys, childPayload);
-                    } catch (err) {
-                        console.error(err.message || String(err));
-                        sys.exit(1);
-                    }
-                }
-            };
-        \`;
-        
-        const blobUrl = URL.createObjectURL(new Blob([workerCode], { type: "application/javascript" }));
-        
-        const workerOptions = { 
-            type: "module", 
-            name: "webrun-sub-worker",
-            deno: { permissions: "inherit" }
-        };
-        
-        const WorkerConstructor = __originalWorker || Worker;
-        const worker = new WorkerConstructor(blobUrl, workerOptions);
-        
-        let stdout = "";
-        let stderr = "";
-        
-        let timer;
-        worker.onmessage = (e) => {
-            if (e.data.type === "stdout") stdout += e.data.chunk + "\\n";
-            else if (e.data.type === "stderr") stderr += e.data.chunk + "\\n";
-            else if (e.data.type === "exit") {
-                if (timer) clearTimeout(timer);
-                URL.revokeObjectURL(blobUrl);
-                resolve({ stdout, stderr, exitCode: e.data.code });
-            }
-        };
-        worker.onerror = (e) => {
-            if (timer) clearTimeout(timer);
-            URL.revokeObjectURL(blobUrl);
-            resolve({ stdout, stderr: stderr + "\\n" + e.message, exitCode: 1 });
-        };
-        
-        if (options.timeoutMillis) {
-            timer = setTimeout(() => {
-                worker.terminate();
-                URL.revokeObjectURL(blobUrl);
-                resolve({ stdout, stderr: stderr + "\\nTimeout limit reached", exitCode: 143 });
-            }, options.timeoutMillis);
+    if (!__spawnChild) {
+        throw new Error("webrun: spawn function not available (context not initialized)");
+    }
+
+    const enc = new TextEncoder();
+
+    // Acquire writers upfront -- throws clearly if the stream is already locked.
+    let stdoutWriter;
+    let stderrWriter;
+    try {
+        stdoutWriter = options.stdout ? options.stdout.getWriter() : null;
+        stderrWriter = options.stderr ? options.stderr.getWriter() : null;
+    } catch (err) {
+        throw new Error(\`webrun: cannot acquire stream writer -- stream may already be locked: \${err.message}\`);
+    }
+
+    // Resolve CWD path if provided.
+    let cwdPath = undefined;
+    if (options.cwd && typeof __resolvePath === "function") {
+        cwdPath = __resolvePath(options.cwd);
+    }
+
+    // Build abort promise if signal provided.
+    let abortPromise = undefined;
+    if (options.signal) {
+        if (options.signal.aborted) {
+            try { stdoutWriter?.releaseLock(); } catch (_) {}
+            try { stderrWriter?.releaseLock(); } catch (_) {}
+            return { exitCode: 143 };
         }
-        
-        const childPayload = { ...__parentPayload };
-        delete (childPayload as any).__udpPort;
-        childPayload.__internalRootUrl = __rootUrl;
-        
-        // webrunBin is inherited from the parent payload.
-        childPayload.sandboxArgs = [...spawnArgs];
-        if (options.memoryMB) childPayload.memoryMB = options.memoryMB;
-        if (options.env) childPayload.finalEnvVars = options.env;
-        
-        worker.postMessage({ type: "spawn", payload: childPayload });
+        abortPromise = new Promise((resolve) => {
+            options.signal.addEventListener("abort", () => resolve(undefined), { once: true });
+        });
+    }
+
+    const nl = String.fromCharCode(10);
+    const result = await __spawnChild(spawnArgs, {
+        memoryMB: options.memoryMB,
+        env: options.env,
+        cwdPath,
+        timeoutMillis: options.timeoutMillis,
+        abort: abortPromise,
+        onStdout: stdoutWriter ? (chunk) => stdoutWriter.write(new TextEncoder().encode(chunk + nl)) : undefined,
+        onStderr: stderrWriter ? (chunk) => stderrWriter.write(new TextEncoder().encode(chunk + nl)) : undefined,
     });
+
+    // Release stream locks.
+    try { stdoutWriter?.close(); } catch (_) {}
+    try { stderrWriter?.close(); } catch (_) {}
+
+    const r = { exitCode: result.exitCode };
+    if (!stdoutWriter) r.stdout = result.stdout || "";
+    if (!stderrWriter) r.stderr = result.stderr || "";
+    return r;
 }
 `;
     const contextURI = `data:application/typescript;charset=utf-8,${encodeURIComponent(contextCode)}`;

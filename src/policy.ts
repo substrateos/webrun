@@ -241,6 +241,21 @@ export function mergeConfigurations(sys: PolicyRuntime, allConfigs: FoundConfig[
 
         Object.assign(finalConfig.permissions!, mostSpecific.config.permissions);
 
+        // If the most-specific config has empty storage, inherit the nearest
+        // parent's storage AND its configDir. Storage paths are relative to
+        // their declaring config's directory, so we must use the parent's
+        // directory as the containment boundary.
+        if (Object.keys(finalConfig.permissions!.storage || {}).length === 0) {
+            for (let i = 1; i < allConfigs.length; i++) {
+                const parentStorage = allConfigs[i].config.permissions?.storage;
+                if (parentStorage && Object.keys(parentStorage).length > 0) {
+                    finalConfig.permissions!.storage = parentStorage;
+                    finalConfigDir = allConfigs[i].dir;
+                    break;
+                }
+            }
+        }
+
         if (mostSpecific.config.module) {
             finalConfig.module = mostSpecific.config.module;
         }

@@ -223,7 +223,7 @@ export async function testBuildSubcommand(t: any) {
         { action: "eval", expected: "run" },
         { action: "serve", expected: "run" },
         { action: "check-only", expected: "check" },
-        { action: "test", expected: "test" },
+        { action: "test", expected: "run" },
         { action: "run", expected: "run" },
     ];
 
