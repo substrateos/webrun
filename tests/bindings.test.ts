@@ -1,14 +1,17 @@
-import { join, dirname } from "https://deno.land/std@0.224.0/path/mod.ts";
+import { dir } from "webrun/ctx";
 import { discoverCases, runBatchCase } from "./case_runner.ts";
 
 export async function testBindings(t: any) {
-    const thisDir = dirname(new URL(import.meta.url).pathname);
-    const cases = discoverCases(t, join(thisDir, "bindings"));
+    const bindingsDir = await dir.getDirectoryHandle("bindings");
+    const cases = await discoverCases(bindingsDir);
     if (cases.length === 0) throw new Error("No bindings test cases discovered");
 
-    for (const { dir, def } of cases) {
+    for (const { dir: caseDir, def } of cases) {
+        // Cases with runner=cli are in tests/external/bindings_host.test.ts.
+        if (def.runner === "cli") continue;
+
         await t.run(def.name, async () => {
-            await runBatchCase(t, dir, def);
+            await runBatchCase(caseDir, def);
         });
     }
 }

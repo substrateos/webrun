@@ -1,6 +1,6 @@
 export default async function(ctx) {
     // Open should be permitted
-    const openRes = await fetch(ctx.bindings.open);
+    const openRes = await ctx.bindings.open.fetch("/");
     const openTx = await openRes.text();
     if (openTx !== "open_ok") throw new Error("Permitted binding failed");
 

@@ -1,1 +1,18 @@
-[{ "name": "Resolves relative scope keys safely against their declaring map directory", "args": ["--module", "child/test.js"], "expect": { "exit_code": 0, "stdout": [{"contains": "SCOPES_OK"}] } }]
+[
+  {
+    "name": "Resolves relative scope keys safely against their declaring map directory",
+    "args": [
+      "--module",
+      "child/test.js"
+    ],
+    "expect": {
+      "exit_code": 0,
+      "stdout": [
+        {
+          "contains": "SCOPES_OK"
+        }
+      ]
+    },
+    "runner": "cli"
+  }
+]

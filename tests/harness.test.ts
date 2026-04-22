@@ -638,3 +638,91 @@ export async function testCategory7_EdgeCases(outerT: TestContext) {
         t.assert(summary.skipped === 1, `Expected 1 skipped, got ${summary.skipped}`);
     });
 }
+
+// =========================================================
+// CATEGORY 8: Streaming Guarantees
+// =========================================================
+//
+// Verifies that step results are printed immediately after each step
+// completes, not buffered until the parent test finishes. This was the
+// root cause of a regression where `make test` appeared to hang for the
+// entire suite duration before printing all results at once.
+
+export async function testCategory8_Streaming(outerT: TestContext) {
+    await outerT.run("sub-step results stream inline with execution", async (t: TestContext) => {
+        // Record the interleaving of execution events and print calls.
+        // If streaming works, the sequence should be:
+        //   exec:A → print:A → exec:B → print:B
+        // If buffered, it would be:
+        //   exec:A → exec:B → print:A → print:B
+        const events: string[] = [];
+
+        const lines: string[] = [];
+        const print = (l: string) => {
+            lines.push(l);
+            // Strip ANSI codes before matching.
+            const clean = strip(l).trim();
+            // Only record step result lines (not headers/summaries).
+            if (clean.includes("... ok") || clean.includes("... FAILED")) {
+                const name = clean.split(" ")[0];
+                events.push(`print:${name}`);
+            }
+        };
+
+        await runTestSuite([{
+            name: "Parent",
+            fn: async (t2: TestContext) => {
+                await t2.run("A", async () => { events.push("exec:A"); });
+                await t2.run("B", async () => { events.push("exec:B"); });
+                await t2.run("C", async () => { events.push("exec:C"); });
+            },
+        }], {}, "streaming.test.ts", print);
+
+        // Expected: exec:A, print:A, exec:B, print:B, exec:C, print:C
+        // Plus 1 print for "Parent", which comes at the end.
+        const stepEvents = events.filter(e => !e.includes("Parent"));
+        t.assert(stepEvents.length === 6,
+            `Expected 6 step events (3 exec + 3 print), got ${stepEvents.length}: ${JSON.stringify(stepEvents)}`);
+
+        // Each exec must be immediately followed by its corresponding print.
+        for (let i = 0; i < 3; i++) {
+            const step = ["A", "B", "C"][i];
+            t.assert(stepEvents[i * 2] === `exec:${step}`,
+                `Expected stepEvents[${i * 2}] = exec:${step}, got ${stepEvents[i * 2]}`);
+            t.assert(stepEvents[i * 2 + 1] === `print:${step}`,
+                `Expected stepEvents[${i * 2 + 1}] = print:${step}, got ${stepEvents[i * 2 + 1]}`);
+        }
+    });
+
+    await outerT.run("nested sub-step results stream before parent summary", async (t: TestContext) => {
+        const events: string[] = [];
+        const print = (l: string) => {
+            const clean = strip(l).trim();
+            if (clean.includes("... ok") || clean.includes("... FAILED")) {
+                const name = clean.split(" ")[0];
+                events.push(`print:${name}`);
+            }
+        };
+
+        await runTestSuite([{
+            name: "Top",
+            fn: async (t2: TestContext) => {
+                await t2.run("child", async (t3: TestContext) => {
+                    await t3.run("leaf", async () => {});
+                });
+            },
+        }], {}, "nested-stream.test.ts", print);
+
+        // Leaf prints before child, child prints before Top.
+        t.assert(events.indexOf("print:leaf") >= 0,
+            `leaf should be in events: ${JSON.stringify(events)}`);
+        t.assert(events.indexOf("print:child") >= 0,
+            `child should be in events: ${JSON.stringify(events)}`);
+        t.assert(events.indexOf("print:Top") >= 0,
+            `Top should be in events: ${JSON.stringify(events)}`);
+        t.assert(events.indexOf("print:leaf") < events.indexOf("print:child"),
+            `leaf should print before child: ${JSON.stringify(events)}`);
+        t.assert(events.indexOf("print:child") < events.indexOf("print:Top"),
+            `child should print before Top: ${JSON.stringify(events)}`);
+    });
+}

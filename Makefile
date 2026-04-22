@@ -1,5 +1,8 @@
 .PHONY: test test-external build-webrtc check-webrtc
 
+# Suppress Deno's background update check for all invocations.
+export DENO_NO_UPDATE_CHECK := 1
+
 # Resolve the project's pinned Deno binary (bootstrapped by ./webrun).
 DENO_BIN := $(shell echo ~/.cache/webrun/deno/deno-*/deno)
 
@@ -14,6 +17,7 @@ src/internal/webrtc/node_modules: src/internal/webrtc/deno.json $(DENO_BIN)
 
 # Run all tests: self-test suite + external suite + webrtc bundle reproducibility check.
 test: check-webrtc
+	$(DENO_BIN) cache --config deno.json webrun.ts
 	./webrun --self-test
 	$(MAKE) test-external
 

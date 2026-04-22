@@ -1,6 +1,6 @@
 export default async function(ctx) {
     await new Promise((r) => setTimeout(r, 1000));
-    const res = await fetch(ctx.bindings.crash_backend);
+    const res = await ctx.bindings.crash_backend.fetch("/");
     if (res.status !== 502) {
         throw new Error(`Expected 502 for crashed backend, got ${res.status}`);
     }

@@ -1,11 +1,13 @@
 export default async function(ctx) {
+    // With per-binding .fetch closures, there is no global webrun:// protocol.
+    // Attempting to fetch a webrun:// URL should fail because it's not a real
+    // network protocol — Deno's native fetch rejects it.
     let blocked = false;
     try {
         await fetch("webrun://arbitrary_forged_name/api");
     } catch (e) {
-        if (e.message.includes("No binding mapped") || e.message.includes("Failed to fetch")) {
-            blocked = true;
-        }
+        // Any error means the forged URL didn't route anywhere.
+        blocked = true;
     }
     if (!blocked) throw new Error("Sandbox failed to block forged binding name schema fetch");
 

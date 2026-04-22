@@ -21,9 +21,8 @@ export interface MuxProxy {
     shutdown: () => Promise<void>;
 }
 
-/** Minimal system interface — listen + serve capabilities. */
+/** Minimal system interface — serve capability. */
 export interface MuxRuntime {
-    listen: typeof Deno.listen;
     serve: typeof Deno.serve;
 }
 
@@ -43,8 +42,7 @@ export function timingSafeEqual(a: Uint8Array, b: Uint8Array): boolean {
     return diff === 0;
 }
 
-/** Maximum retry attempts for ephemeral port binding. */
-const BIND_RETRIES = 3;
+
 
 /**
  * Starts a streaming reverse proxy on an ephemeral localhost port.
@@ -53,11 +51,8 @@ const BIND_RETRIES = 3;
  * a known set of bindings using constant-time comparison. Request and
  * response bodies stream through without buffering.
  *
- * Port binding note: An ephemeral port is discovered via listen({ port: 0 }),
- * then released so Deno.serve can bind it. A retry loop mitigates the narrow
- * TOCTOU window where another process could claim the port between close()
- * and serve(). Deno.serve({ listener }) was evaluated but does not handle
- * requests in Deno 2.7 — the listener is silently ignored.
+ * Port binding: uses Deno.serve({ port: 0 }) which atomically binds
+ * an OS-assigned ephemeral port with no TOCTOU window.
  *
  * Returns null if bindings is empty (no proxy needed).
  */
@@ -114,28 +109,13 @@ export function startMuxProxy(
         }
     };
 
-    // Retry loop: discover ephemeral port, close, rebind via serve.
-    // The TOCTOU window is microseconds; retries cover the rare collision.
-    let lastError: Error | null = null;
-    for (let attempt = 0; attempt < BIND_RETRIES; attempt++) {
-        const listener = sys.listen({ port: 0, hostname: "127.0.0.1" });
-        const port = (listener.addr as Deno.NetAddr).port;
-        listener.close();
-
-        try {
-            const server = sys.serve(
-                { port, hostname: "127.0.0.1", onListen: () => {} },
-                handler,
-            );
-            return {
-                port,
-                shutdown: () => server.shutdown(),
-            };
-        } catch (e: any) {
-            lastError = e;
-            // Port was stolen — retry with a new ephemeral port
-        }
-    }
-
-    throw lastError || new Error("Failed to bind mux proxy after retries");
+    const server = sys.serve(
+        { port: 0, hostname: "127.0.0.1", onListen: () => {} },
+        handler,
+    );
+    const port = (server.addr as Deno.NetAddr).port;
+    return {
+        port,
+        shutdown: () => server.shutdown(),
+    };
 }

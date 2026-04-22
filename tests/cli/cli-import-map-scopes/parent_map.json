@@ -1,1 +1,1 @@
-{"scopes": {"./parent-scope/": {"utils_mod": "data:text/javascript,export const a = 'parent-a';"}}}
+{"scopes": {"./parent-scope/": {"utils_mod": "data:text/javascript,export const a = 'parent-a';"}, "./child/child-scope/": {"utils_mod": "data:text/javascript,export const a = 'child-a';"}}}

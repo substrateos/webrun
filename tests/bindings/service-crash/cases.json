@@ -1,7 +1,18 @@
 [
   {
     "name": "Service Crash Propagation: Module unhandled exceptions return native 500 status over IPC proxy",
-    "args": ["--module", "test.js"],
-    "expect": { "exit_code": 0, "stdout": [{"contains": "CRASH_PROPAGATION_OK"}] }
+    "args": [
+      "--module",
+      "test.js"
+    ],
+    "expect": {
+      "exit_code": 0,
+      "stdout": [
+        {
+          "contains": "CRASH_PROPAGATION_OK"
+        }
+      ]
+    },
+    "runner": "cli"
   }
 ]

@@ -1,8 +1,22 @@
 [
   {
     "name": "Process Environment Filtering: Bootstrapped children exclusively inherit specific OS variables",
-    "args": ["--module", "test.js"],
-    "env": {"HOST_LEAK": "pwned", "ALLOWED_VAR": "secret"},
-    "expect": { "exit_code": 0, "stdout": [{"contains": "ENV_FILTER_OK"}] }
+    "args": [
+      "--module",
+      "test.js"
+    ],
+    "env": {
+      "HOST_LEAK": "pwned",
+      "ALLOWED_VAR": "secret"
+    },
+    "expect": {
+      "exit_code": 0,
+      "stdout": [
+        {
+          "contains": "ENV_FILTER_OK"
+        }
+      ]
+    },
+    "runner": "cli"
   }
 ]

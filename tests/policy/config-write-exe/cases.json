@@ -5,7 +5,7 @@
     "expect": {
       "exit_code": 1,
       "stderr": [
-        {"contains": "[Security Fatal] Storage permissions cannot traverse outside the configuration directory."},
+        {"contains": "[Security Fatal] Storage permissions cannot use absolute paths."},
         {"contains": "Attempted :"}
       ]
     }

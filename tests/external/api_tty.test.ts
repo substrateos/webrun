@@ -3,16 +3,16 @@
 // Requires: real TTY (stdin: "inherit"), stty.
 // Runner: ~/.cache/webrun/deno/deno-*/deno test -A tests/external/api_tty.test.ts
 
-import { denoTest } from "./_adapter.ts";
-import { join, dirname } from "https://deno.land/std@0.224.0/path/mod.ts";
+import { registerTests, sys } from "./_adapter.ts";
+import { WEBRUN_BIN } from "./_cli_runner.ts";
+import { dirname, join } from "https://deno.land/std@0.224.0/path/mod.ts";
 
-denoTest("ApiTty", async (t) => {
-    const WORKER_BIN = Deno.env.get("WEBRUN_BIN") || join(dirname(new URL(import.meta.url).pathname), "../../webrun");
+export async function testApiTty(t: any) {
 
     await t.run("ctx.tty lifecycle: setRawMode, isRaw, columns, rows", async () => {
-        const tmpApi = Deno.realPathSync(Deno.makeTempDirSync());
-        Deno.writeTextFileSync(`${tmpApi}/webrun.json`, "{}");
-        Deno.writeTextFileSync(`${tmpApi}/tty_lifecycle.js`, `
+        const tmpApi = sys.realPathSync(sys.makeTempDirSync());
+        sys.writeTextFileSync(`${tmpApi}/webrun.json`, "{}");
+        sys.writeTextFileSync(`${tmpApi}/tty_lifecycle.js`, `
 export default async function(ctx) {
     if (!ctx.tty) { console.log("NO_TTY"); return; }
     if (ctx.tty.isRaw !== false) throw new Error("isRaw not false initially");
@@ -31,7 +31,7 @@ export default async function(ctx) {
     console.log("RAW_RESTORED=" + ctx.tty.isRaw);
     console.log("LIFECYCLE_OK");
 }`);
-        const proc = new Deno.Command(WORKER_BIN, {
+        const proc = new sys.Command(WEBRUN_BIN, {
             args: ["--module", "tty_lifecycle.js"], cwd: tmpApi,
             stdout: "piped", stderr: "piped", stdin: "inherit"
         });
@@ -48,16 +48,16 @@ export default async function(ctx) {
     });
 
     await t.run("ctx.tty cleanup: raw mode restored after exception", async () => {
-        const tmpApi = Deno.realPathSync(Deno.makeTempDirSync());
-        Deno.writeTextFileSync(`${tmpApi}/webrun.json`, "{}");
-        Deno.writeTextFileSync(`${tmpApi}/tty_cleanup.js`, `
+        const tmpApi = sys.realPathSync(sys.makeTempDirSync());
+        sys.writeTextFileSync(`${tmpApi}/webrun.json`, "{}");
+        sys.writeTextFileSync(`${tmpApi}/tty_cleanup.js`, `
 export default async function(ctx) {
     if (!ctx.tty) { console.log("NO_TTY"); return; }
     await ctx.tty.setRawMode(true);
     console.log("RAW_ENABLED");
     throw new Error("DELIBERATE_CRASH");
 }`);
-        const proc = new Deno.Command(WORKER_BIN, {
+        const proc = new sys.Command(WEBRUN_BIN, {
             args: ["--module", "tty_cleanup.js"], cwd: tmpApi,
             stdout: "piped", stderr: "piped", stdin: "inherit"
         });
@@ -80,11 +80,11 @@ export default async function(ctx) {
     });
 
     await t.run("ctx.tty cleanup: raw mode restored after timeout", async () => {
-        const tmpApi = Deno.realPathSync(Deno.makeTempDirSync());
-        Deno.writeTextFileSync(`${tmpApi}/webrun.json`, JSON.stringify({
+        const tmpApi = sys.realPathSync(sys.makeTempDirSync());
+        sys.writeTextFileSync(`${tmpApi}/webrun.json`, JSON.stringify({
             limits: { timeoutMillis: 2000 }
         }));
-        Deno.writeTextFileSync(`${tmpApi}/tty_timeout.js`, `
+        sys.writeTextFileSync(`${tmpApi}/tty_timeout.js`, `
 export default async function(ctx) {
     if (!ctx.tty) { console.log("NO_TTY"); return; }
     await ctx.tty.setRawMode(true);
@@ -93,14 +93,14 @@ export default async function(ctx) {
 }`);
         let initialStty = "";
         try {
-            const sttyCmd = new Deno.Command("stty", { args: ["-g"], stdout: "piped", stdin: "inherit" });
+            const sttyCmd = new sys.Command("stty", { args: ["-g"], stdout: "piped", stdin: "inherit" });
             const sttyOut = await sttyCmd.output();
             initialStty = new TextDecoder().decode(sttyOut.stdout).trim();
         } catch (_) {
             return t.log("Skipping: no stty available");
         }
 
-        const proc = new Deno.Command(WORKER_BIN, {
+        const proc = new sys.Command(WEBRUN_BIN, {
             args: ["--module", "tty_timeout.js"], cwd: tmpApi,
             stdout: "piped", stderr: "piped", stdin: "inherit"
         });
@@ -114,7 +114,7 @@ export default async function(ctx) {
 
         let finalStty = "";
         try {
-            const sttyCmd = new Deno.Command("stty", { args: ["-g"], stdout: "piped", stdin: "inherit" });
+            const sttyCmd = new sys.Command("stty", { args: ["-g"], stdout: "piped", stdin: "inherit" });
             const sttyOut = await sttyCmd.output();
             finalStty = new TextDecoder().decode(sttyOut.stdout).trim();
         } catch (_) {}
@@ -131,7 +131,7 @@ export default async function(ctx) {
 
         if (initialStty !== finalStty) {
             try {
-                const restoreCmd = new Deno.Command("stty", { args: [initialStty] });
+                const restoreCmd = new sys.Command("stty", { args: [initialStty] });
                 await restoreCmd.output();
             } catch (_) {}
             throw new Error("TTY timeout test failed: terminal state was modified and not restored.");
@@ -139,9 +139,9 @@ export default async function(ctx) {
     });
 
     await t.run("ctx.tty raw mode protects stdin reads from EAGAIN", async () => {
-        const tmpApi = Deno.realPathSync(Deno.makeTempDirSync());
-        Deno.writeTextFileSync(`${tmpApi}/webrun.json`, "{}");
-        Deno.writeTextFileSync(`${tmpApi}/tty_eagain.js`, `
+        const tmpApi = sys.realPathSync(sys.makeTempDirSync());
+        sys.writeTextFileSync(`${tmpApi}/webrun.json`, "{}");
+        sys.writeTextFileSync(`${tmpApi}/tty_eagain.js`, `
 export default async function(ctx) {
     if (!ctx.tty || !ctx.stdin) { console.log("NO_TTY"); return; }
     await ctx.tty.setRawMode(true);
@@ -156,7 +156,7 @@ export default async function(ctx) {
         await ctx.tty.setRawMode(false);
     }
 }`);
-        const proc = new Deno.Command(WORKER_BIN, {
+        const proc = new sys.Command(WEBRUN_BIN, {
             args: ["--module", "tty_eagain.js"], cwd: tmpApi,
             stdout: "piped", stderr: "piped", stdin: "inherit"
         });
@@ -172,4 +172,8 @@ export default async function(ctx) {
             throw new Error("TTY EAGAIN test failed.\nSTDOUT: " + stdout + "\nSTDERR: " + stderr);
         }
     });
-});
+}
+
+import * as self from "./api_tty.test.ts";
+registerTests(self);
+

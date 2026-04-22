@@ -1,14 +1,17 @@
-import { join, dirname } from "https://deno.land/std@0.224.0/path/mod.ts";
+import { dir } from "webrun/ctx";
 import { discoverCases, runBatchCase } from "./case_runner.ts";
 
 export async function testCli(t: any) {
-    const thisDir = dirname(new URL(import.meta.url).pathname);
-    const cases = discoverCases(t, join(thisDir, "cli"));
+    const cliDir = await dir.getDirectoryHandle("cli");
+    const cases = await discoverCases(cliDir);
     if (cases.length === 0) throw new Error("No CLI test cases discovered");
 
-    for (const { dir, def } of cases) {
+    for (const { dir: caseDir, def } of cases) {
+        // Cases with runner=cli are in tests/external/cli_host.test.ts.
+        if (def.runner === "cli") continue;
+
         await t.run(def.name, async () => {
-            await runBatchCase(t, dir, def);
+            await runBatchCase(caseDir, def);
         });
     }
 }

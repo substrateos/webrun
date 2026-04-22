@@ -1,5 +1,17 @@
-import { resolve, dirname } from "https://deno.land/std@0.224.0/path/mod.ts";
+import { resolve, dirname, isAbsolute } from "https://deno.land/std@0.224.0/path/mod.ts";
 import { tryRealpathSync } from "./sys.ts";
+
+/**
+ * Thrown when a security constraint is violated. Replaces the former
+ * sys.exit(1) pattern so that control flow halts explicitly even when
+ * sys.exit is a mock (e.g. in tests).
+ */
+export class SecurityViolationError extends Error {
+    constructor(reason: string) {
+        super(reason);
+        this.name = "SecurityViolationError";
+    }
+}
 import { printWarning, printSecurityFatal } from "./log.ts";
 import { WebrunConfig, PolicyRuntime } from "./types.ts";
 import { generateBaseImportMap, rewriteImportMapPathsToAbsolute, mergeImportMaps } from "./config.ts";
@@ -31,13 +43,30 @@ export function evaluateEnclavePolicy(sys: PolicyRuntime, configDirs: Record<str
     const allowedBindings: string[] = [];
 
     for (let [fsPath, settings] of Object.entries(configDirs)) {
+        // Structural constraints: reject paths before resolution to make
+        // the invariant structural rather than computational.
+        if (isAbsolute(fsPath)) {
+            printSecurityFatal("Storage permissions cannot use absolute paths. Use relative paths from the config directory.", {
+                Attempted: fsPath,
+                ConfigDir: configDir
+            });
+            throw new SecurityViolationError(`Absolute storage path: ${fsPath}`);
+        }
+        if (fsPath.split("/").includes("..") || fsPath.split("\\").includes("..")) {
+            printSecurityFatal("Storage permissions cannot traverse outside the configuration directory.", {
+                Attempted: fsPath,
+                ConfigDir: configDir
+            });
+            throw new SecurityViolationError(`Traversal in storage path: ${fsPath}`);
+        }
+
         const absFsPath = resolve(configDir, fsPath);
         if (!absFsPath.startsWith(configDir) && absFsPath !== configDir) {
             printSecurityFatal("Storage permissions cannot traverse outside the configuration directory.", {
                 Attempted: fsPath,
                 ConfigDir: configDir
             });
-            sys.exit(1);
+            throw new SecurityViolationError(`Storage path escapes config dir: ${fsPath}`);
         }
         
         if (currentDir === absFsPath || currentDir.startsWith(absFsPath + "/")) {
@@ -90,20 +119,17 @@ export function findLocalConfigurations(sys: PolicyRuntime, currentDir: string):
         let foundPath = "";
 
         try {
-            if (sys.statSync(potentialWebrunPath).isFile) {
-                foundConfig = JSON.parse(sys.readTextFileSync(potentialWebrunPath));
-                foundPath = potentialWebrunPath;
-            }
+            const content = sys.readTextFileSync(potentialWebrunPath);
+            foundConfig = JSON.parse(content);
+            foundPath = potentialWebrunPath;
         } catch (_) { }
 
         if (!foundConfig) {
             try {
-                if (sys.statSync(potentialPackagePath).isFile) {
-                    const pkgInfo = JSON.parse(sys.readTextFileSync(potentialPackagePath));
-                    if (pkgInfo.webrun && typeof pkgInfo.webrun === "object") {
-                        foundConfig = pkgInfo.webrun;
-                        foundPath = potentialPackagePath;
-                    }
+                const pkgInfo = JSON.parse(sys.readTextFileSync(potentialPackagePath));
+                if (pkgInfo.webrun && typeof pkgInfo.webrun === "object") {
+                    foundConfig = pkgInfo.webrun;
+                    foundPath = potentialPackagePath;
                 }
             } catch (_) { }
         }
@@ -146,7 +172,7 @@ export function validatePrivilegeNarrowing(sys: PolicyRuntime, parentConfig: Web
                 Child: childDir,
                 Parent: parentDir
             });
-            sys.exit(1);
+            throw new SecurityViolationError("Escalating timeoutMillis");
         }
         if (parentConfig.limits.memoryMB !== undefined && childConfig.limits?.memoryMB !== undefined && childConfig.limits.memoryMB > parentConfig.limits.memoryMB) {
             printSecurityFatal("Privilege escalation detected in nested configuration.", {
@@ -156,7 +182,7 @@ export function validatePrivilegeNarrowing(sys: PolicyRuntime, parentConfig: Web
                 Child: childDir,
                 Parent: parentDir
             });
-            sys.exit(1);
+            throw new SecurityViolationError("Escalating memoryMB");
         }
     }
 
@@ -168,7 +194,7 @@ export function validatePrivilegeNarrowing(sys: PolicyRuntime, parentConfig: Web
                 Child: childDir,
                 Parent: parentDir
             });
-            sys.exit(1);
+            throw new SecurityViolationError(`Escalating env: ${e}`);
         }
     }
 
@@ -180,7 +206,7 @@ export function validatePrivilegeNarrowing(sys: PolicyRuntime, parentConfig: Web
                 Child: childDir,
                 Parent: parentDir
             });
-            sys.exit(1);
+            throw new SecurityViolationError(`Escalating network: ${n}`);
         }
     }
 
@@ -193,9 +219,44 @@ export function validatePrivilegeNarrowing(sys: PolicyRuntime, parentConfig: Web
                     Child: childDir,
                     Parent: parentDir
                 });
-                sys.exit(1);
+                throw new SecurityViolationError(`Escalating binding: ${bindingName}`);
             }
         }
+    }
+
+    if (childConfig.permissions?.imports) {
+        const parentImports = parentConfig.permissions?.imports || [];
+        for (const i of childConfig.permissions.imports) {
+            if (!parentImports.includes(i)) {
+                printSecurityFatal("Privilege escalation detected in nested configuration.", {
+                    Reason: "Escalating 'imports' permissions",
+                    Attempted: i,
+                    Child: childDir,
+                    Parent: parentDir
+                });
+                throw new SecurityViolationError(`Escalating imports: ${i}`);
+            }
+        }
+    }
+
+    if (childConfig.permissions?.gpu && !parentConfig.permissions?.gpu) {
+        printSecurityFatal("Privilege escalation detected in nested configuration.", {
+            Reason: "Escalating 'gpu' permissions",
+            Attempted: "true",
+            Child: childDir,
+            Parent: parentDir
+        });
+        throw new SecurityViolationError("Escalating gpu");
+    }
+
+    if ((childConfig.permissions as any)?.webrtc && !(parentConfig.permissions as any)?.webrtc) {
+        printSecurityFatal("Privilege escalation detected in nested configuration.", {
+            Reason: "Escalating 'webrtc' permissions",
+            Attempted: "true",
+            Child: childDir,
+            Parent: parentDir
+        });
+        throw new SecurityViolationError("Escalating webrtc");
     }
 
     const parentStorageAbs = Object.entries(parentConfig.permissions!.storage!).map(([k, v]: [string, any]) => ({ path: resolve(parentDir, k), access: v.access }));
@@ -219,7 +280,7 @@ export function validatePrivilegeNarrowing(sys: PolicyRuntime, parentConfig: Web
                 Child: childDir,
                 Parent: parentDir
             });
-            sys.exit(1);
+            throw new SecurityViolationError(`Escalating storage: ${c.path}`);
         }
     }
 }
@@ -241,20 +302,8 @@ export function mergeConfigurations(sys: PolicyRuntime, allConfigs: FoundConfig[
 
         Object.assign(finalConfig.permissions!, mostSpecific.config.permissions);
 
-        // If the most-specific config has empty storage, inherit the nearest
-        // parent's storage AND its configDir. Storage paths are relative to
-        // their declaring config's directory, so we must use the parent's
-        // directory as the containment boundary.
-        if (Object.keys(finalConfig.permissions!.storage || {}).length === 0) {
-            for (let i = 1; i < allConfigs.length; i++) {
-                const parentStorage = allConfigs[i].config.permissions?.storage;
-                if (parentStorage && Object.keys(parentStorage).length > 0) {
-                    finalConfig.permissions!.storage = parentStorage;
-                    finalConfigDir = allConfigs[i].dir;
-                    break;
-                }
-            }
-        }
+        // Empty storage = no storage (fallback to temp). We no longer inherit
+        // parent storage — configs are structurally self-contained.
 
         if (mostSpecific.config.module) {
             finalConfig.module = mostSpecific.config.module;
@@ -268,40 +317,29 @@ export function mergeConfigurations(sys: PolicyRuntime, allConfigs: FoundConfig[
             finalConfig.serve = mostSpecific.config.serve;
         }
 
+        // Accumulate bindings, importMaps, and limits from all configs (parent-first order).
+        // Bindings: most-specific wins per key (parent-first, child overwrites).
+        // ImportMaps: accumulate all (parent-first order).
+        // Limits: take the minimum across all levels.
         for (let i = allConfigs.length - 1; i >= 0; i--) {
             const cfg = allConfigs[i].config;
             const dir = allConfigs[i].dir;
+
             if (cfg.bindings) {
                 if (!finalConfig.bindings) finalConfig.bindings = {};
-                const parsedBindings = JSON.parse(JSON.stringify(cfg.bindings));
-                for (const v of Object.values(parsedBindings) as any[]) {
-                    if (v.module && typeof v.module === "string") {
-                        v.module = resolve(dir, v.module);
+                for (const [k, v] of Object.entries(cfg.bindings) as [string, any][]) {
+                    const entry = { ...v };
+                    if (entry.module && typeof entry.module === "string") {
+                        entry.module = resolve(dir, entry.module);
                     }
-                }
-                Object.assign(finalConfig.bindings, parsedBindings);
-            }
-        }
-
-        if (finalConfig.bindings && finalConfig.permissions?.bindings) {
-            const allowed = finalConfig.permissions.bindings;
-            for (const key of Object.keys(finalConfig.bindings)) {
-                if (!allowed.includes(key)) {
-                    delete finalConfig.bindings[key];
+                    finalConfig.bindings[k] = entry;
                 }
             }
-        }
 
-
-        for (let i = allConfigs.length - 1; i >= 0; i--) {
-            const cfg = allConfigs[i].config;
             if (cfg.importMap) {
-                importMapPaths.push(resolve(allConfigs[i].dir, cfg.importMap));
+                importMapPaths.push(resolve(dir, cfg.importMap));
             }
-        }
 
-        for (let i = allConfigs.length - 1; i >= 0; i--) {
-            const cfg = allConfigs[i].config;
             if (cfg.limits) {
                 if (!finalConfig.limits) finalConfig.limits = {};
                 if (cfg.limits.timeoutMillis !== undefined) {
@@ -313,6 +351,16 @@ export function mergeConfigurations(sys: PolicyRuntime, allConfigs: FoundConfig[
                     finalConfig.limits.memoryMB = finalConfig.limits.memoryMB === undefined
                         ? cfg.limits.memoryMB
                         : Math.min(finalConfig.limits.memoryMB, cfg.limits.memoryMB);
+                }
+            }
+        }
+
+        // Prune bindings not listed in permissions.bindings.
+        if (finalConfig.bindings && finalConfig.permissions?.bindings) {
+            const allowed = finalConfig.permissions.bindings;
+            for (const key of Object.keys(finalConfig.bindings)) {
+                if (!allowed.includes(key)) {
+                    delete finalConfig.bindings[key];
                 }
             }
         }
@@ -354,13 +402,12 @@ export function validateSandboxSafetyBoundaries(sys: PolicyRuntime, policy: Encl
 
         for (const rawProtectedFile of protectedFiles) {
             const protectedFile = tryRealpathSync(sys, rawProtectedFile) || rawProtectedFile;
-
             if (protectedFile === canonicalAllowed || protectedFile.startsWith(canonicalAllowed + "/")) {
                 printSecurityFatal("The webrun file is within a permitted write directory. Refusing to run.", {
                     Executable: protectedFile,
                     Permitted: canonicalAllowed
                 });
-                sys.exit(1);
+                throw new SecurityViolationError("Executable in write directory");
             }
         }
     }
@@ -369,6 +416,6 @@ export function validateSandboxSafetyBoundaries(sys: PolicyRuntime, policy: Encl
         printSecurityFatal("The working directory is not granted read access in webrun.json storage permissions.", {
             Directory: cwd
         });
-        sys.exit(1);
+        throw new SecurityViolationError("Working directory not readable");
     }
 }

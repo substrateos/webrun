@@ -8,25 +8,24 @@
 // bundle produced by --self-bundle is built against the current source tree and
 // cannot guarantee round-trip identity; that is by design and not a defect.
 
-import { denoTest } from "./_adapter.ts";
-import { join, dirname } from "https://deno.land/std@0.224.0/path/mod.ts";
+import { registerTests, sys } from "./_adapter.ts";
+import { WEBRUN_BIN } from "./_cli_runner.ts";
+import { dirname, join } from "https://deno.land/std@0.224.0/path/mod.ts";
 import { assertEquals, assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.ts";
-
-const WORKER_BIN = Deno.env.get("WEBRUN_BIN") || join(dirname(new URL(import.meta.url).pathname), "../../webrun");
-const isBundled = Deno.readTextFileSync(WORKER_BIN).includes("\n__DATA__\n");
+const isBundled = sys.readTextFileSync(WEBRUN_BIN).includes("\n__DATA__\n");
 
 // ── BundlingBehavior ──────────────────────────────────────────────────────
 // Runs against both dev and release builds. Produces a bundled executable
 // from the dev source if needed, then validates it can run user scripts and
 // enforces storage permissions.
 
-denoTest("BundlingBehavior", async (t) => {
-    const runDir = Deno.realPathSync(Deno.makeTempDirSync({ prefix: "sandbox_tb_" }));
-    let bundledExecutable = WORKER_BIN;
+export async function testBundlingBehavior(t: any) {
+    const runDir = sys.realPathSync(sys.makeTempDirSync({ prefix: "sandbox_tb_" }));
+    let bundledExecutable = WEBRUN_BIN;
 
     if (!isBundled) {
-        const workspaceDir = dirname(WORKER_BIN);
-        const bundle1Cmd = new Deno.Command(WORKER_BIN, {
+        const workspaceDir = dirname(WEBRUN_BIN);
+        const bundle1Cmd = new sys.Command(WEBRUN_BIN, {
             args: ["--self-bundle"],
             cwd: workspaceDir,
             stdout: "piped",
@@ -36,12 +35,12 @@ denoTest("BundlingBehavior", async (t) => {
         assertEquals(out1.code, 0, "Webrun failed to bundle itself:\n" + new TextDecoder().decode(out1.stderr));
 
         bundledExecutable = join(runDir, "webrun-bundled");
-        Deno.writeFileSync(bundledExecutable, out1.stdout, { mode: 0o755 });
+        sys.writeFileSync(bundledExecutable, out1.stdout, { mode: 0o755 });
     }
 
     await t.run("[CLI] Bundled executable supports programmatic API dynamically", async () => {
         const testScript = join(runDir, "dynamic_test.js");
-        Deno.writeTextFileSync(testScript, `
+        sys.writeTextFileSync(testScript, `
             import { webrun } from "webrun/ctx";
             export default async function(ctx) {
                 const res = await webrun(["--memory=512", "--eval", "console.log('dynamic_eval_ok');"]);
@@ -50,7 +49,7 @@ denoTest("BundlingBehavior", async (t) => {
                 console.log("DYNAMIC_OK");
             }
         `);
-        const evalCmd = new Deno.Command(bundledExecutable, {
+        const evalCmd = new sys.Command(bundledExecutable, {
             args: ["--module", testScript],
             cwd: runDir,
             stdout: "piped",
@@ -63,21 +62,21 @@ denoTest("BundlingBehavior", async (t) => {
 
     await t.run("[CLI] Bundled executable strictly enforces bounding directories", async () => {
         const secretFile = join(runDir, "secret.js");
-        Deno.writeTextFileSync(secretFile, "export const TOP_SECRET = 'DATA';");
+        sys.writeTextFileSync(secretFile, "export const TOP_SECRET = 'DATA';");
 
         const sandboxDir = join(runDir, "sandbox");
-        Deno.mkdirSync(sandboxDir);
-        Deno.writeTextFileSync(join(sandboxDir, "webrun.json"), JSON.stringify({
+        sys.mkdirSync(sandboxDir);
+        sys.writeTextFileSync(join(sandboxDir, "webrun.json"), JSON.stringify({
             permissions: { storage: { ".": { access: "read" } } }
         }));
         const script = join(sandboxDir, "read_secret.js");
-        Deno.writeTextFileSync(script, `
+        sys.writeTextFileSync(script, `
             import { TOP_SECRET } from "../secret.js";
             export default async function(ctx) {
                 console.log("LEAKED: " + TOP_SECRET);
             }
         `);
-        const runCmd = new Deno.Command(bundledExecutable, {
+        const runCmd = new sys.Command(bundledExecutable, {
             args: ["--module", script],
             cwd: sandboxDir,
             stdout: "piped",
@@ -88,8 +87,8 @@ denoTest("BundlingBehavior", async (t) => {
         assertStringIncludes(new TextDecoder().decode(out.stderr), "Requires read access");
     });
 
-    try { Deno.removeSync(runDir, { recursive: true }); } catch (_) {}
-});
+    try { sys.removeSync(runDir, { recursive: true }); } catch (_) {}
+}
 
 // ── BundlingRoundTrip ─────────────────────────────────────────────────────
 // Supply-chain integrity: unbundle → inspect source → rebundle → SHA-256 match.
@@ -97,40 +96,43 @@ denoTest("BundlingBehavior", async (t) => {
 // A dev-tree bundle cannot guarantee round-trip identity because the unbundled
 // source is reconstructed from inline source maps, not a committed file tree.
 
-if (isBundled) {
-    denoTest("BundlingRoundTrip", async (t) => {
-        const runDir = Deno.realPathSync(Deno.makeTempDirSync({ prefix: "sandbox_rt_" }));
+export async function testBundlingRoundTrip(t: any) {
+    const runDir = sys.realPathSync(sys.makeTempDirSync({ prefix: "sandbox_rt_" }));
 
-        await t.run("[CLI] Bundling and Unbundling maintains structural integrity", async () => {
-            const unbundleCmd = new Deno.Command(WORKER_BIN, {
-                args: ["--self-unbundle", join(runDir, "webrun-unbundled")],
-                cwd: runDir,
-                stdout: "piped",
-                stderr: "piped"
-            });
-            const out2 = await unbundleCmd.output();
-            assertEquals(out2.code, 0, "Bundled executable failed to unbundle itself:\n" + new TextDecoder().decode(out2.stderr));
-
-            const rebundleCmd = new Deno.Command(join(runDir, "webrun-unbundled", "webrun"), {
-                args: ["--self-bundle"],
-                cwd: join(runDir, "webrun-unbundled"),
-                stdout: "piped",
-                stderr: "piped"
-            });
-            const out3 = await rebundleCmd.output();
-            assertEquals(out3.code, 0, "Unbundled executable failed to rebundle itself:\n" + new TextDecoder().decode(out3.stderr));
-            Deno.writeFileSync(join(runDir, "webrun-repacked"), out3.stdout, { mode: 0o755 });
-
-            const hashHex = async (buf: Uint8Array) => {
-                const hashBuffer = await crypto.subtle.digest("SHA-256", buf as any);
-                const hashArray = Array.from(new Uint8Array(hashBuffer));
-                return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-            };
-            const digest1 = await hashHex(Deno.readFileSync(WORKER_BIN));
-            const digest2 = await hashHex(Deno.readFileSync(join(runDir, "webrun-repacked")));
-            assertEquals(digest1, digest2, "Bundle round-trip produced different bytes. Supply-chain integrity violated.");
+    await t.run("[CLI] Bundling and Unbundling maintains structural integrity", async () => {
+        const unbundleCmd = new sys.Command(WEBRUN_BIN, {
+            args: ["--self-unbundle", join(runDir, "webrun-unbundled")],
+            cwd: runDir,
+            stdout: "piped",
+            stderr: "piped"
         });
+        const out2 = await unbundleCmd.output();
+        assertEquals(out2.code, 0, "Bundled executable failed to unbundle itself:\n" + new TextDecoder().decode(out2.stderr));
 
-        try { Deno.removeSync(runDir, { recursive: true }); } catch (_) {}
+        const rebundleCmd = new sys.Command(join(runDir, "webrun-unbundled", "webrun"), {
+            args: ["--self-bundle"],
+            cwd: join(runDir, "webrun-unbundled"),
+            stdout: "piped",
+            stderr: "piped"
+        });
+        const out3 = await rebundleCmd.output();
+        assertEquals(out3.code, 0, "Unbundled executable failed to rebundle itself:\n" + new TextDecoder().decode(out3.stderr));
+        sys.writeFileSync(join(runDir, "webrun-repacked"), out3.stdout, { mode: 0o755 });
+
+        const hashHex = async (buf: Uint8Array) => {
+            const hashBuffer = await crypto.subtle.digest("SHA-256", buf as any);
+            const hashArray = Array.from(new Uint8Array(hashBuffer));
+            return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+        };
+        const digest1 = await hashHex(sys.readFileSync(WEBRUN_BIN));
+        const digest2 = await hashHex(sys.readFileSync(join(runDir, "webrun-repacked")));
+        assertEquals(digest1, digest2, "Bundle round-trip produced different bytes. Supply-chain integrity violated.");
     });
+
+    try { sys.removeSync(runDir, { recursive: true }); } catch (_) {}
 }
+
+import * as self from "./bundling.test.ts";
+const toRegister: Record<string, unknown> = { testBundlingBehavior: self.testBundlingBehavior };
+if (isBundled) toRegister.testBundlingRoundTrip = self.testBundlingRoundTrip;
+registerTests(toRegister);

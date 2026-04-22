@@ -18,6 +18,14 @@ export interface WebrunConfig {
         bindings?: string[];
         /** Whether to grant WebGPU access. */
         gpu?: boolean;
+        /** Whether to enable the WebRTC polyfill (CLI only; browsers have native WebRTC). */
+        webrtc?: boolean;
+        /**
+         * Allowed remote hosts for ES module imports (["*"] for unrestricted).
+         * Maps to Deno's --allow-import flag.
+         * Default trusted hosts (deno.land, jsr.io, esm.sh, etc.) are always included.
+         */
+        imports?: string[];
     };
     /** Host-side binding service declarations (process or module). */
     bindings?: Record<string, any>;
@@ -73,22 +81,10 @@ export interface CommandInvocation {
 }
 
 /**
- * Serialized payload written to disk and read by the guest process.
+ * Shared fields present in every sandbox payload regardless of action.
  * Contains everything the inner sandbox needs to configure itself.
  */
-export interface SandboxContextPayload {
-    action: "run" | "test" | "eval" | "check-only" | "serve";
-    /**
-     * @deprecated Legacy compat. Consumed only by injectLegacyTestCapabilities().
-     * Remove alongside testCapabilities when tests are migrated to webrun/ctx.
-     */
-    webrunBin?: string;
-    /**
-     * @deprecated Legacy compat. Consumed only by injectLegacyTestCapabilities().
-     * Remove alongside testCapabilities when tests are migrated to webrun/ctx.
-     */
-    isRepackedTest?: boolean;
-    isSelfCheck?: boolean;
+interface CommonPayload {
     /** Absolute path to the host directory mapped as ctx.dir. */
     storageRoot: string;
     /** True when no storage permissions are declared (uses a temp dir). */
@@ -98,25 +94,15 @@ export interface SandboxContextPayload {
     finalEnvVars: Record<string, string>;
     targetUrlHref: string;
     targetScriptPath: string;
-    evalCode?: string;
     sandboxArgs: string[];
     /** Absolute path to the OPFS root (ephemeral or persistent). */
     opfsRoot: string;
-    /**
-     * @deprecated Translation-layer compat flag. Causes injectLegacyTestCapabilities()
-     * in guest.ts to expose raw sys primitives as t.testsys on the test context.
-     * Remove once all tests under tests/ are migrated to webrun/ctx APIs.
-     */
-    testCapabilities?: boolean;
     memoryMB?: number;
     bindingsMap: Record<string, BindingEntry>;
     allowedBindings: string[];
     allowGpu?: boolean;
     /** Port of the host-side mux proxy (null if no process bindings). */
     muxPort?: number | null;
-    /** Mapping of binding name → bearer token for mux proxy auth. */
-    tokenMap?: Record<string, string>;
-    serveInterfaces?: { host: string; port: number }[];
     config?: WebrunConfig;
     configDir?: string;
     /**
@@ -125,15 +111,24 @@ export interface SandboxContextPayload {
      * Always cleaned up on process exit.
      */
     runnerTmp?: string;
-    /** Inline filter pattern from --test=<pattern>. */
-    filterPattern?: string;
-    /** Additional test module URLs for multi-module --test mode. */
-    additionalTargetUrls?: string[];
-    /** Additional test module paths for multi-module --test mode. */
-    additionalTargetPaths?: string[];
     /** Landlock policy for Linux self-sandboxing. Undefined on non-Linux. */
     landlockPolicy?: LandlockPolicy;
+    /** Bearer token for the host-side spawn server (ctx.webrun() IPC). */
+    spawnToken?: string;
+    /** Self-test marker (internal use). */
+    isSelfCheck?: boolean;
 }
+
+/**
+ * Discriminated union for the sandbox payload.
+ * Each variant carries only the fields relevant to its action.
+ */
+export type SandboxContextPayload =
+    | CommonPayload & { action: "run" }
+    | CommonPayload & { action: "check-only" }
+    | CommonPayload & { action: "eval"; evalCode: string }
+    | CommonPayload & { action: "test"; filterPattern?: string; additionalTargetUrls?: string[]; additionalTargetPaths?: string[] }
+    | CommonPayload & { action: "serve"; serveInterfaces: { host: string; port: number }[] };
 
 
 // =========================================================
@@ -152,7 +147,7 @@ export type NetAddr = Deno.NetAddr;
 
 /** Resolved binding entry — describes a process or module binding. */
 export interface BindingEntry {
-    type: "process" | "module";
+    type: "process";
     uuid: string;
     path?: string;
     port?: number;
@@ -212,3 +207,11 @@ export type HostRuntime = Pick<typeof Deno,
     'readTextFileSync' | 'writeTextFileSync' | 'realPathSync' | 'mkdirSync' |
     'makeTempDirSync' | 'openSync' | 'removeSync' | 'statSync' | 'listen' | 'serve' |
     'addSignalListener' | 'removeSignalListener' | 'stdin' | 'consoleSize'> & { env: RuntimeEnv };
+
+/** tests/external/ — host-validated test runner. */
+export type TestExternalRuntime = Pick<typeof Deno,
+    'readDirSync' | 'readTextFileSync' | 'readFileSync' |
+    'writeTextFileSync' | 'writeFileSync' | 'copyFileSync' |
+    'mkdirSync' | 'removeSync' | 'makeTempDirSync' | 'realPathSync' | 'statSync' |
+    'Command' | 'execPath' | 'listen' | 'serve' | 'test'> & { env: RuntimeEnv };
+

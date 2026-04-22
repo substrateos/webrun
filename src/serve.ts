@@ -1,8 +1,7 @@
 import type { SandboxContextPayload, ServeRuntime } from "./types.ts";
-import { join, dirname, extname } from "https://deno.land/std@0.224.0/path/mod.ts";
-import { contentType } from "https://deno.land/std@0.224.0/media_types/mod.ts";
+import { createStaticHandler, createModuleShimHandler } from "./static_server.ts";
 
-export async function executeServePayload(sys: ServeRuntime, payload: SandboxContextPayload, contextPayload: any) {
+export async function executeServePayload(sys: ServeRuntime, payload: SandboxContextPayload & { action: "serve" }, contextPayload: any) {
     contextPayload.command = payload.targetScriptPath;
 
     const webrunCtxMod = await import("webrun/ctx").catch(() => null);
@@ -19,13 +18,9 @@ export async function executeServePayload(sys: ServeRuntime, payload: SandboxCon
                 pathStr = pathStr.slice(1);
             }
             try {
-                // Use async stat — statSync internally references the runtime global
-                // which has been deleted in the guest context. The async variant works.
                 const stat = await sys.stat(pathStr);
                 isDir = stat?.isDirectory || false;
-            } catch (_) {
-                // Ignore missing target
-            }
+            } catch (_) {}
         } catch (err: any) {
             console.warn(`[Webrun] stat failed for ${payload.targetScriptPath}:`, err.message);
         }
@@ -48,12 +43,11 @@ export async function executeServePayload(sys: ServeRuntime, payload: SandboxCon
         console.log(`[Webrun] Mode: module shim for ${payload.targetScriptPath}`);
     }
 
-    let targetFilename = "";
-    if (!isDir) {
-        // Find filename from targetScriptPath for the shim
-        const parts = payload.targetScriptPath.split(/[\\/]/);
-        targetFilename = parts.pop() || "";
-    }
+    // Build the handler by composing user fetch, static server, or module shim.
+    const staticHandler = createStaticHandler(sys, payload.targetScriptPath, isDir);
+    const shimHandler = !isDir
+        ? createModuleShimHandler(payload.targetScriptPath.split(/[\\/]/).pop() || "")
+        : null;
 
     const handler = async (req: Request) => {
         const url = new URL(req.url);
@@ -62,30 +56,9 @@ export async function executeServePayload(sys: ServeRuntime, payload: SandboxCon
         if (userFetch) {
             response = await userFetch(req, contextPayload.env, contextPayload);
         } else if (!isDir && url.pathname === "/") {
-            // If a specific script module was targeted but lacked a 'fetch' handler, 
-            // we serve a dynamic JavaScript shim at the root to proxy exports.
-            const shim = `export * from "./${targetFilename}";\nimport * as mod from "./${targetFilename}";\nexport default mod.default;`;
-            response = new Response(shim, { headers: { "Content-Type": "text/javascript" } });
+            response = shimHandler!();
         } else {
-            let finalPath = url.pathname;
-            if (finalPath.endsWith("/")) finalPath += "index.html";
-            if (finalPath.includes("..")) {
-                response = new Response("Forbidden", { status: 403 });
-                console.log(`${req.method} ${url.pathname} ${response.status}`);
-                return response;
-            }
-            try {
-                // Serve statically. If target was a file, serve from its parent directory.
-                const targetPath = isDir ? payload.targetScriptPath : dirname(payload.targetScriptPath);
-                const absolutePath = join(targetPath, finalPath);
-                const ext = extname(absolutePath).toLowerCase();
-                const cType = contentType(ext) || "application/octet-stream";
-                const file = sys.readFileSync(absolutePath);
-                response = new Response(file as BodyInit, { headers: { "Content-Type": cType } });
-            } catch (err: any) {
-                if (err.name === "NotFound") response = new Response("Not Found", { status: 404 });
-                else response = new Response(err.message, { status: 500 });
-            }
+            response = staticHandler(req);
         }
 
         console.log(`${req.method} ${url.pathname} ${response!.status}`);
@@ -93,7 +66,7 @@ export async function executeServePayload(sys: ServeRuntime, payload: SandboxCon
     };
 
     const servers: any[] = [];
-    for (const iface of payload.serveInterfaces || []) {
+    for (const iface of payload.serveInterfaces) {
         const server = sys.serve({ port: iface.port, hostname: iface.host, onListen: () => {} }, handler);
         servers.push(server);
         console.log(`Webrun serving at http://${server.addr.hostname}:${server.addr.port}/`);

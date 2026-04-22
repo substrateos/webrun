@@ -1,7 +1,18 @@
 [
   {
     "name": "Lifecycle & Port Tunneling: Natively routes fetch to Deno sub-socket allocating dynamic port variable",
-    "args": ["--module", "test.js"],
-    "expect": { "exit_code": 0, "stdout": [{"contains": "PROCESS_TUNNEL_OK"}] }
+    "args": [
+      "--module",
+      "test.js"
+    ],
+    "expect": {
+      "exit_code": 0,
+      "stdout": [
+        {
+          "contains": "PROCESS_TUNNEL_OK"
+        }
+      ]
+    },
+    "runner": "cli"
   }
 ]

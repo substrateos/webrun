@@ -1,7 +1,18 @@
 [
   {
     "name": "Module Fetch Routing: Proxies raw Web API fetch to module Service Worker via postMessage IPC",
-    "args": ["--module", "test.js"],
-    "expect": { "exit_code": 0, "stdout": [{"contains": "FETCH_PROXY_OK"}] }
+    "args": [
+      "--module",
+      "test.js"
+    ],
+    "expect": {
+      "exit_code": 0,
+      "stdout": [
+        {
+          "contains": "FETCH_PROXY_OK"
+        }
+      ]
+    },
+    "runner": "cli"
   }
 ]

@@ -6,25 +6,7 @@
 //
 // Run: ~/.cache/webrun/deno/deno-*/deno test -A tests/external/harness_deno.test.ts
 
-import { denoTest } from "./_adapter.ts";
-import {
-    testCategory1_CoreAssertions,
-    testCategory2_SkipSemantics,
-    testCategory3_Nesting,
-    testCategory4_Filtering,
-    testCategory5_ErrorIsolation,
-    testCategory6_OutputFormat,
-    testCategory7_EdgeCases,
-} from "../harness.test.ts";
+import { registerTests } from "./_adapter.ts";
+import * as harness from "../harness.test.ts";
 
-for (const fn of [
-    testCategory1_CoreAssertions,
-    testCategory2_SkipSemantics,
-    testCategory3_Nesting,
-    testCategory4_Filtering,
-    testCategory5_ErrorIsolation,
-    testCategory6_OutputFormat,
-    testCategory7_EdgeCases,
-]) {
-    denoTest(fn.name.replace(/^test/, ""), fn);
-}
+registerTests(harness);

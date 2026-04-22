@@ -1,5 +1,5 @@
 export default async function(ctx) {
-    const res = await fetch(ctx.bindings.ai, { method: "POST", body: "hello" });
+    const res = await ctx.bindings.ai.fetch("/", { method: "POST", body: "hello" });
     if (res.status !== 200) throw new Error("Failed proxy fetch");
     const text = await res.text();
     if (text !== "world_from_worker") throw new Error("IPC payload body mismatch: " + text);

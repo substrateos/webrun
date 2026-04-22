@@ -1,25 +1,48 @@
-// _adapter.ts — Shim that bridges Deno.test ↔ our TestContext protocol.
+// _adapter.ts — External test entry point.
 //
-// External tests use the same TestContext interface as sandbox tests,
-// but run under raw Deno.test instead of webrun's sandbox harness.
-//
-// Usage:
-//   import { denoTest } from "./_adapter.ts";
-//   import { testMyThing } from "../my.test.ts";
-//   denoTest("MyThing", testMyThing);
+// 1. Creates the concrete sys object for the host environment.
+// 2. Bridges the host test runner ↔ our TestContext protocol.
+// 3. Registers test*-prefixed exports as test suites.
 
+import type { TestExternalRuntime } from "../../src/types.ts";
 import type { TestContext } from "../../src/test_harness.ts";
+
+// ── Sys binding ──────────────────────────────────────────────────────────────
+
+const d = globalThis.Deno;
+
+export const sys: TestExternalRuntime = {
+    readDirSync: d.readDirSync,
+    readTextFileSync: d.readTextFileSync,
+    readFileSync: d.readFileSync,
+    writeTextFileSync: d.writeTextFileSync,
+    writeFileSync: d.writeFileSync,
+    copyFileSync: d.copyFileSync,
+    mkdirSync: d.mkdirSync,
+    removeSync: d.removeSync,
+    makeTempDirSync: d.makeTempDirSync,
+    realPathSync: d.realPathSync,
+    statSync: d.statSync,
+    Command: d.Command,
+    execPath: d.execPath.bind(d),
+    listen: d.listen.bind(d),
+    serve: d.serve.bind(d),
+    test: d.test,
+    env: d.env,
+};
+
+// ── TestContext shim ─────────────────────────────────────────────────────────
 
 class SkipSignal {
     constructor(readonly message: string) {}
 }
 
-function shimCtx(denoT: Deno.TestContext): TestContext {
+function shimCtx(hostT: { name: string; step: Function }): TestContext {
     return {
-        get name() { return denoT.name; },
+        get name() { return hostT.name; },
 
         async run(name: string, fn: (t: TestContext) => Promise<void>): Promise<void> {
-            await denoT.step(name, async (subT: Deno.TestContext) => {
+            await hostT.step(name, async (subT: any) => {
                 try {
                     await fn(shimCtx(subT));
                 } catch (err) {
@@ -47,18 +70,22 @@ function shimCtx(denoT: Deno.TestContext): TestContext {
     };
 }
 
-const denoTestOpts = {
+const testOpts = {
     sanitizeOps: false,
     sanitizeResources: false,
     sanitizeExit: false,
 } as const;
 
 /**
- * Register a TestContext-shaped function as a Deno.test.
+ * Register all `test*`-prefixed functions as host test suites.
+ *
+ * Follows the same naming convention as the sandbox test harness:
+ * `testFoo` → test suite named `"Foo"`.
  */
-export function denoTest(
-    name: string,
-    fn: (t: TestContext) => Promise<void>,
-): void {
-    Deno.test({ name, ...denoTestOpts }, (t) => fn(shimCtx(t)));
+export function registerTests(exports: Record<string, unknown>): void {
+    for (const [name, fn] of Object.entries(exports)) {
+        if (!name.startsWith("test") || typeof fn !== "function") continue;
+        const displayName = name.slice("test".length);
+        sys.test({ name: displayName, ...testOpts }, (t) => (fn as any)(shimCtx(t)));
+    }
 }

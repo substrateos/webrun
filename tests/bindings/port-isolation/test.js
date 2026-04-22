@@ -1,6 +1,6 @@
 export default async function(ctx) {
     // Verify the mux route works
-    const res = await fetch(ctx.bindings.my_backend);
+    const res = await ctx.bindings.my_backend.fetch("/");
     if (res.status !== 200) throw new Error("Mux fetch failed: " + res.status);
     const body = await res.text();
     if (body !== "echo_ok") throw new Error("Unexpected body: " + body);

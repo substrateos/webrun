@@ -1,7 +1,18 @@
 [
   {
     "name": "Graceful Teardown & Zombie Prevention: Process terminates definitively natively when sandbox completes",
-    "args": ["--module", "test.js"],
-    "expect": { "exit_code": 0, "stdout": [{"contains": "ZOMBIE_TEST_FINISHED"}] }
+    "args": [
+      "--module",
+      "test.js"
+    ],
+    "expect": {
+      "exit_code": 0,
+      "stdout": [
+        {
+          "contains": "ZOMBIE_TEST_FINISHED"
+        }
+      ]
+    },
+    "runner": "cli"
   }
 ]

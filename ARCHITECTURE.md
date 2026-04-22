@@ -33,19 +33,25 @@
 webrun                         # Bash bootstrap – locates ~/.cache/webrun/deno
 webrun.ts                      # Supervisor entrypoint; UDP relay host
 webrun.test.ts                 # In-process test harness bootstrapper
+webrun.d.ts                    # Type declarations for webrun consumers
 src/
+  adapter.ts                   # Environment adapter interface (CLI vs Browser primitives)
+  adapters/                    # Environment-specific adapters (cli.ts, web.ts)
   config.ts                    # webrun.json parsing, privilege narrowing, import map merging
-  host.ts                      # Outer orchestrator: config resolution, policy, jail, process spawning
+  fs.ts                        # W3C FileSystemDirectoryHandle over host paths (OPFS shim)
   guest.ts                     # Sandbox interior: globals, signals, fetch proxy, test harness
+  host/                        # Outer orchestrator: spawn, OPFS, bindings, HTML test runner
+  import_proxy.ts              # MITM HTTPS proxy for browser-like User-Agent masking
   jail.ts                      # Process image construction, macOS seatbelt profiles, runtime flags
   landlock.ts                  # Linux kernel self-sandboxing via Landlock FFI (ABI 1–5)
   mux.ts                       # Streaming reverse proxy routing guest fetch to host-side bindings
   policy.ts                    # Config discovery, permission narrowing, enclave policy evaluation
-  fs.ts                        # W3C FileSystemDirectoryHandle over host paths (OPFS shim)
   serve.ts                     # HTTP/WebSocket server binding for the `serve` action
-  log.ts                       # Formatted terminal output (errors, warnings, usage)
   sys.ts                       # Parameterized utility functions (tryRealpathSync, etc.)
+  test_harness.ts              # Internal standalone test suite runner (mimics Deno.test)
+  tls_cert.ts                  # Ephemeral CA and TLS cert generation for import proxy
   types.ts                     # Shared types, runtime capability interfaces, portable aliases
+  log.ts                       # Formatted terminal output (errors, warnings, usage)
   workarounds/
     deno/stdin.ts              # EAGAIN-resilient stdin ReadableStream for macOS raw TTY mode
   internal/
@@ -167,7 +173,7 @@ webrun --module script.ts
 
 ### Test Mode
 
-In test mode (`--test[=filter]`), the guest process discovers exported functions starting with `test` from one or more modules and registers them with the native test runner. When multiple modules are provided as positional args (`--test a.test.ts b.test.ts`), all are loaded and their test exports merged. An optional inline filter (`--test=pattern`) applies at two levels: top-level (skipping entire test exports whose name doesn't match, when any top-level name does match) and sub-step (skipping sub-tests inside `t.run()` calls).
+In test mode (`--test[=filter]`), the guest process discovers exported functions starting with `test` from one or more modules and executes them using the internal test harness. When multiple modules are provided as positional args (`--test a.test.ts b.test.ts`), all are loaded and their test exports merged. An optional inline filter (`--test=pattern`) applies at two levels: top-level (skipping entire test exports whose name doesn't match, when any top-level name does match) and sub-step (skipping sub-tests inside `t.run()` calls).
 
 ## OPFS Persistence
 

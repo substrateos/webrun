@@ -3,26 +3,27 @@
 // Requires: nativeFetch, dynamic import from localhost, WebSocket.
 // Runner: ~/.cache/webrun/deno/deno-*/deno test -A tests/external/serve_dynamic.test.ts
 
-import { denoTest } from "./_adapter.ts";
-import { join, dirname } from "https://deno.land/std@0.224.0/path/mod.ts";
+import { registerTests, sys } from "./_adapter.ts";
+import { WEBRUN_BIN } from "./_cli_runner.ts";
+import { dirname, join } from "https://deno.land/std@0.224.0/path/mod.ts";
+import type { NetAddr } from "../../src/types.ts";
 
 function getFreePort(): number {
-    const listener = Deno.listen({ port: 0 });
-    const port = (listener.addr as Deno.NetAddr).port;
+    const listener = sys.listen({ port: 0 });
+    const port = (listener.addr as NetAddr).port;
     listener.close();
     return port;
 }
 
-denoTest("ServeDynamic", async (t) => {
-    const WORKER_BIN = Deno.env.get("WEBRUN_BIN") || join(dirname(new URL(import.meta.url).pathname), "../../webrun");
+export async function testServeDynamic(t: any) {
 
     await t.run("End-to-End Fetch Dynamic Script Shim", async () => {
         const port = getFreePort();
-        const tmpApi = Deno.makeTempDirSync();
-        Deno.writeTextFileSync(`${tmpApi}/webrun.json`, '{"permissions":{"storage":{".":{  "access":"read"}}}}');
-        Deno.writeTextFileSync(`${tmpApi}/api.js`, "export const answer = 42; export function calculate() { return answer; }");
+        const tmpApi = sys.makeTempDirSync();
+        sys.writeTextFileSync(`${tmpApi}/webrun.json`, '{"permissions":{"storage":{".":{  "access":"read"}}}}');
+        sys.writeTextFileSync(`${tmpApi}/api.js`, "export const answer = 42; export function calculate() { return answer; }");
 
-        const p = new Deno.Command(WORKER_BIN, {
+        const p = new sys.Command(WEBRUN_BIN, {
             args: ["--serve", `--bind=127.0.0.1:${port}`, "--module", "api.js"],
             cwd: tmpApi,
             stdout: "inherit",
@@ -47,9 +48,9 @@ denoTest("ServeDynamic", async (t) => {
 
     await t.run("WebSocket Upgrade and Echo Protocol", async () => {
         const port = getFreePort();
-        const tmpApi = Deno.makeTempDirSync();
-        Deno.writeTextFileSync(`${tmpApi}/webrun.json`, '{"permissions":{"storage":{".":{  "access":"read"}}}}');
-        Deno.writeTextFileSync(`${tmpApi}/ws_server.js`, `
+        const tmpApi = sys.makeTempDirSync();
+        sys.writeTextFileSync(`${tmpApi}/webrun.json`, '{"permissions":{"storage":{".":{  "access":"read"}}}}');
+        sys.writeTextFileSync(`${tmpApi}/ws_server.js`, `
 import { upgradeWebSocket } from "webrun/ctx";
 
 export default {
@@ -66,7 +67,7 @@ export default {
 }
 `);
 
-        const p = new Deno.Command(WORKER_BIN, {
+        const p = new sys.Command(WEBRUN_BIN, {
             args: ["--serve", `--bind=127.0.0.1:${port}`, "--module", "ws_server.js"],
             cwd: tmpApi,
             stdout: "null",
@@ -106,4 +107,7 @@ export default {
             try { p.kill("SIGTERM"); await p.status; } catch (_) {}
         }
     });
-});
+}
+
+import * as self from "./serve_dynamic.test.ts";
+registerTests(self);

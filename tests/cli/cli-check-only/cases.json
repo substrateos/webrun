@@ -1,6 +1,59 @@
 [
-  { "name": "--check-only catches TS type errors and does not execute", "args": ["--check-only", "--module", "invalid_types.ts"], "expect": { "exit_code": 1, "stderr": [{"contains": "Type 'string' is not assignable to type 'number'"}] } },
-  { "name": "--check-only catches JS syntax errors and does not execute (no module)", "args": ["--check-only", "invalid_syntax.js"], "expect": { "exit_code": 1 } },
-  { "name": "--check-only catches JS syntax errors and does not execute (with module)", "args": ["--check-only", "--module", "invalid_syntax.js"], "expect": { "exit_code": 1 } },
-  { "name": "Default execution ignores TS type errors natively", "args": ["--module", "run_bypass.ts"], "expect": { "exit_code": 0, "stdout": [{"contains": "BYPASS_SUCCESS_string"}], "stderr": [] } }
+  {
+    "name": "--check-only catches TS type errors and does not execute",
+    "args": [
+      "--check-only",
+      "--module",
+      "invalid_types.ts"
+    ],
+    "expect": {
+      "exit_code": 1,
+      "stderr": [
+        {
+          "contains": "Type 'string' is not assignable to type 'number'"
+        }
+      ]
+    },
+    "runner": "cli"
+  },
+  {
+    "name": "--check-only catches JS syntax errors and does not execute (no module)",
+    "args": [
+      "--check-only",
+      "invalid_syntax.js"
+    ],
+    "expect": {
+      "exit_code": 1
+    },
+    "runner": "cli"
+  },
+  {
+    "name": "--check-only catches JS syntax errors and does not execute (with module)",
+    "args": [
+      "--check-only",
+      "--module",
+      "invalid_syntax.js"
+    ],
+    "expect": {
+      "exit_code": 1
+    },
+    "runner": "cli"
+  },
+  {
+    "name": "Default execution ignores TS type errors natively",
+    "args": [
+      "--module",
+      "run_bypass.ts"
+    ],
+    "expect": {
+      "exit_code": 0,
+      "stdout": [
+        {
+          "contains": "BYPASS_SUCCESS_string"
+        }
+      ],
+      "stderr": []
+    },
+    "runner": "cli"
+  }
 ]

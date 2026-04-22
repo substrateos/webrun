@@ -1,13 +1,12 @@
-// globals_deno.test.ts — Raw Deno pass for globals test cases.
+// globals_deno.test.ts — Raw host-runtime pass for globals test cases.
 //
-// Verifies that the same scripts produce equivalent behavior under raw Deno
-// as they do under the webrun sandbox. The webrun pass stays in globals.test.ts.
-//
-// Runner: ~/.cache/webrun/deno/deno-*/deno test -A tests/external/globals_deno.test.ts
+// Verifies that the same scripts produce equivalent behavior under the raw
+// host runtime as they do under the webrun sandbox. The webrun pass is in
+// globals_webrun.test.ts.
 
-import { denoTest } from "./_adapter.ts";
+import { registerTests, sys } from "./_adapter.ts";
 import { join, dirname } from "https://deno.land/std@0.224.0/path/mod.ts";
-import type { CaseExpect } from "../case_runner.ts";
+import type { CaseExpect } from "./_cli_runner.ts";
 
 interface GlobalsCaseDefinition {
     name: string;
@@ -20,13 +19,13 @@ interface GlobalsCaseDefinition {
 
 function discoverGlobalsCases(rootDir: string): { dir: string; def: GlobalsCaseDefinition }[] {
     const cases: { dir: string; def: GlobalsCaseDefinition }[] = [];
-    let entries: Deno.DirEntry[];
-    try { entries = [...Deno.readDirSync(rootDir)]; } catch { return cases; }
+    let entries: Iterable<{ name: string; isDirectory: boolean }>;
+    try { entries = sys.readDirSync(rootDir); } catch { return cases; }
     for (const entry of entries) {
         if (!entry.isDirectory) continue;
         const caseDir = join(rootDir, entry.name);
         try {
-            const raw = Deno.readTextFileSync(join(caseDir, "cases.json"));
+            const raw = sys.readTextFileSync(join(caseDir, "cases.json"));
             const defs: GlobalsCaseDefinition[] = JSON.parse(raw);
             for (const def of defs) cases.push({ dir: caseDir, def });
         } catch {
@@ -37,26 +36,26 @@ function discoverGlobalsCases(rootDir: string): { dir: string; def: GlobalsCaseD
 }
 
 function copyDirRecursive(src: string, dest: string): void {
-    Deno.mkdirSync(dest, { recursive: true });
-    for (const entry of Deno.readDirSync(src)) {
+    sys.mkdirSync(dest, { recursive: true });
+    for (const entry of sys.readDirSync(src)) {
         const srcPath = join(src, entry.name);
         const destPath = join(dest, entry.name);
         if (entry.isDirectory) {
             copyDirRecursive(srcPath, destPath);
         } else {
-            Deno.copyFileSync(srcPath, destPath);
+            sys.copyFileSync(srcPath, destPath);
         }
     }
 }
 
-denoTest("GlobalsDeno", async (t) => {
+export async function testGlobalsDeno(t: any) {
     const thisDir = dirname(new URL(import.meta.url).pathname);
     const cases = discoverGlobalsCases(join(thisDir, "..", "globals"));
     if (cases.length === 0) throw new Error("No globals test cases discovered");
 
     for (const { dir, def } of cases) {
         await t.run(`[deno] ${def.name}`, async () => {
-            const runDir = Deno.realPathSync(Deno.makeTempDirSync({ prefix: "gbl_" }));
+            const runDir = sys.realPathSync(sys.makeTempDirSync({ prefix: "gbl_" }));
             copyDirRecursive(dir, runDir);
 
             const args = def.args || ["--module", "main.ts"];
@@ -64,8 +63,10 @@ denoTest("GlobalsDeno", async (t) => {
             const cwd = def.cwd ? join(runDir, def.cwd) : runDir;
             const fullScript = join(cwd, scriptPath);
 
-            const wrapperPath = join(runDir, "__deno_wrapper__.ts");
-            Deno.writeTextFileSync(wrapperPath, `
+            // This wrapper script runs under the raw host runtime to simulate
+            // a minimal OPFS-like environment for the test scripts.
+            const wrapperPath = join(runDir, "__wrapper__.ts");
+            sys.writeTextFileSync(wrapperPath, `
                 const cwd = Deno.cwd();
                 const dirShim = {
                     async getFileHandle(name, opts) {
@@ -87,7 +88,7 @@ denoTest("GlobalsDeno", async (t) => {
                 }
             `);
 
-            const proc = new Deno.Command(Deno.execPath(), {
+            const proc = new sys.Command(sys.execPath(), {
                 args: ["run", "-A", wrapperPath],
                 cwd,
                 env: def.env,
@@ -121,7 +122,7 @@ denoTest("GlobalsDeno", async (t) => {
             ]);
 
             clearTimeout(timer);
-            try { Deno.removeSync(runDir, { recursive: true }); } catch (_) {}
+            try { sys.removeSync(runDir, { recursive: true }); } catch (_) {}
 
             const expect = def.expect_deno;
             const combined = stdout + "\n" + stderr;
@@ -144,4 +145,7 @@ denoTest("GlobalsDeno", async (t) => {
             }
         });
     }
-});
+}
+
+import * as self from "./globals_deno.test.ts";
+registerTests(self);

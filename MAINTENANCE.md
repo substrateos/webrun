@@ -11,21 +11,29 @@ This guide explains `webrun` repository structure, dependency management, testin
 ├── webrun                     # Self-bootstrapping executable wrapper
 ├── webrun.ts                  # Main entrypoint and host-side UDP relay
 ├── webrun.test.ts             # Built-in test suite bootstrapper
+├── webrun.d.ts                # Type declarations for webrun consumers
 ├── README.md                  # User guide
 ├── ARCHITECTURE.md            # Internal architecture and design decisions
 ├── COMPATIBILITY.md           # Web platform API compatibility table
 ├── MAINTENANCE.md             # This file
+├── AGENTS.md                  # Guidelines for LLM agents working on WebRun
+├── Makefile                   # Build automation commands
 ├── src/                       # Implementation
+│   ├── adapter.ts             # Environment adapter interface (CLI vs Browser primitives)
+│   ├── adapters/              # Environment-specific adapters (cli.ts, web.ts)
 │   ├── config.ts              # Policy parsing, privilege narrowing, import map merging
-│   ├── host.ts                # Outer orchestrator: config, policy, jail, process spawning
+│   ├── fs.ts                  # W3C FileSystemDirectoryHandle over host paths (OPFS shim)
 │   ├── guest.ts               # Sandbox interior: globals, signals, fetch proxy, test harness
+│   ├── host/                  # Outer orchestrator: spawn, OPFS, bindings, HTML test runner
+│   ├── import_proxy.ts        # MITM HTTPS proxy for browser-like User-Agent masking
 │   ├── jail.ts                # Process image construction, macOS seatbelt, runtime flags
 │   ├── landlock.ts            # Linux kernel self-sandboxing via Landlock FFI (ABI 1–5)
-│   ├── mux.ts                 # Streaming reverse proxy routing guest fetch to host-side bindings
+│   ├── mux.ts                 # Streaming reverse proxy routing guest fetch to host bindings
 │   ├── policy.ts              # Config discovery, permission narrowing, enclave evaluation
-│   ├── fs.ts                  # W3C FileSystemDirectoryHandle over host paths (OPFS shim)
 │   ├── serve.ts               # HTTP server binding for the `serve` action
 │   ├── sys.ts                 # Parameterized utility functions (tryRealpathSync, etc.)
+│   ├── test_harness.ts        # Internal standalone test suite runner (mimics Deno.test)
+│   ├── tls_cert.ts            # Ephemeral CA and TLS cert generation for import proxy
 │   ├── types.ts               # Runtime capability interfaces and portable type aliases
 │   ├── log.ts                 # Formatted terminal output (errors, warnings, usage)
 │   ├── workarounds/
@@ -37,6 +45,9 @@ This guide explains `webrun` repository structure, dependency management, testin
 │       └── werift_entry.ts    # Esbuild entrypoint for the WebRTC bundle
 ├── build_webrtc.ts            # Build script for webrtc_bundle.js (includes sandbox patches)
 ├── tests/                     # Test cases
+├── examples/                  # Example scripts and projects
+├── rfc/                       # Specifications and Requests for Comments
+├── memos/                     # Design memos and field reports
 ├── deno.json                  # Enables dependency vendoring and import maps
 ├── deno.lock                  # Cryptographically pinned dependency resolution
 └── vendor/                    # Local cache of remote modules for offline execution
@@ -59,9 +70,8 @@ Changes must sync with the `vendor/` cache.
    ```bash
    ./webrun --self-test
    ```
-   *Run a specific suite: `./webrun --self-test=SandboxCases`*
+   *Run a specific test or suite by name substring: `./webrun --self-test=SandboxHost`*
 
-   Available suites: `Api`, `Bindings`, `BundlingBehavior`, `Cli`, `Globals`, `Policy`, `SandboxCases`, `Serve`.
    See [tests/README.md](tests/README.md) for test case format and conventions.
 
 2. **Verify Offline Isolation:** Ensure changes do not require network access during isolated runs.

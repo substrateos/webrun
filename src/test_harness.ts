@@ -56,6 +56,10 @@ function createCtx(
     passThrough: boolean,
     childResults: Result[],
     logSink: (line: string) => void,
+    /** Immediate output sink for real-time streaming. */
+    print?: (line: string) => void,
+    /** Nesting depth for indentation. */
+    depth?: number,
 ): TestContext {
     return {
         name,
@@ -66,7 +70,7 @@ function createCtx(
             const subPath = [...path, subName];
             const subLogs: string[] = [];
             const subChildren: Result[] = [];
-            const subCtx = createCtx(subName, subPath, filterStr, true, subChildren, (l) => subLogs.push(l));
+            const subCtx = createCtx(subName, subPath, filterStr, true, subChildren, (l) => subLogs.push(l), print, (depth ?? 0) + 1);
 
             const start = performance.now();
             let status: Result["status"] = "ok";
@@ -79,11 +83,25 @@ function createCtx(
                 if (isSkip(err)) { status = "skipped"; } else { status = "failed"; error = err; }
             }
 
-            childResults.push({
+            const result: Result = {
                 name: subName, path: subPath, status,
                 durationMs: Math.round(performance.now() - start),
                 error, children: subChildren, logs: subLogs,
-            });
+            };
+            childResults.push(result);
+
+            // Stream immediately if a print sink is available.
+            if (print) {
+                const d = depth ?? 0;
+                const pad = "  ".repeat(d + 1);
+                if (result.logs.length > 0) {
+                    print(`${pad}------- output -------`);
+                    for (const l of result.logs) print(`${pad}${l}`);
+                    print(`${pad}----- output end -----`);
+                }
+                print(`${pad}${result.name} ... ${statusLabel(result.status)} ${C.gray}(${result.durationMs}ms)${C.reset}`);
+                // Sub-children were already streamed by their own createCtx calls.
+            }
         },
 
         assert(condition: any, message?: string): void {
@@ -207,7 +225,7 @@ export async function runTestSuite(
         const topChildren: Result[] = [];
         // passThrough=true when filter selects this test by name, or no filter at all.
         const passThrough = !filterStr || hasTopMatch;
-        const topCtx = createCtx(name, [name], filterStr, passThrough, topChildren, (l) => topLogs.push(l));
+        const topCtx = createCtx(name, [name], filterStr, passThrough, topChildren, (l) => topLogs.push(l), print, 0);
 
         const start = performance.now();
         let status: Result["status"] = "ok";
@@ -231,14 +249,13 @@ export async function runTestSuite(
         for (const f of failures([result])) allFailures.push(f);
 
         // ── Per-test output ──
+        // Step results were already streamed inline by createCtx.
+        // Print the top-level test's own logs and summary line.
         if (topLogs.length > 0) {
-            print(`${name} ...`);
             print(`------- output -------`);
             for (const l of topLogs) print(l);
             print(`----- output end -----`);
         }
-
-        for (const child of topChildren) render(child, 1, print);
 
         const t = `${C.gray}(${durationMs}ms)${C.reset}`;
         if (status === "failed") {

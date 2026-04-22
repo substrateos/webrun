@@ -1,7 +1,14 @@
 // Shared case runner for directory-based test discovery.
-// Used by cli.test.ts, api.test.ts, bindings.test.ts, and sandbox.test.ts.
+// Used by cli.test.ts, api.test.ts, and bindings.test.ts.
+//
+// All operations use the webrun/ctx API:
+//   - Fixture discovery via FileSystemDirectoryHandle (ctx.dir)
+//   - Temp dirs via ctx.makeTempDir()
+//   - Process spawning via ctx.webrun()
+//
+// CLI-subprocess tests (runner=cli, runner=cli-signal) are in tests/external/.
 
-import { join } from "https://deno.land/std@0.224.0/path/mod.ts";
+import { dir, makeTempDir, webrun } from "webrun/ctx";
 
 interface ContainsRule { contains?: string; absent?: string }
 
@@ -31,151 +38,150 @@ export interface CaseDefinition {
     cwd?: string;
     signal?: string;
     timeout_ms?: number;
+    /** Declares which runner this case requires.
+     *  - "cli": tests/external (host subprocess, batch)
+     *  - "cli-signal": tests/external (host subprocess, streaming + signal)
+     *  - absent: auto-selected (runSignalCase if signal, else runBatchCase) */
+    runner?: "cli" | "cli-signal";
     expect: CaseExpect;
 }
 
-export function copyDirRecursive(t: any, src: string, dest: string) {
-    for (const entry of t.testsys.readDirSync(src)) {
-        const srcPath = join(src, entry.name);
-        const destPath = join(dest, entry.name);
-        if (entry.isDirectory) {
-            t.testsys.mkdirSync(destPath, { recursive: true });
-            copyDirRecursive(t, srcPath, destPath);
+// ── FSDH Helpers ─────────────────────────────────────────────────────────────
+
+type DirHandle = any;  // FileSystemDirectoryHandle
+
+/** Copy all entries from src to dest, recursively. */
+export async function copyDir(src: DirHandle, dest: DirHandle): Promise<void> {
+    for await (const [name, handle] of src.entries()) {
+        if (handle.kind === "directory") {
+            const sub = await dest.getDirectoryHandle(name, { create: true });
+            await copyDir(handle, sub);
         } else {
-            t.testsys.writeFileSync(destPath, t.testsys.readFileSync(srcPath));
+            const file = await handle.getFile();
+            const data = new Uint8Array(await file.arrayBuffer());
+            const destFile = await dest.getFileHandle(name, { create: true });
+            const writable = await destFile.createWritable();
+            await writable.write(data);
+            await writable.close();
         }
     }
 }
 
-// Discover all cases.json files recursively under rootDir.
-export function discoverCases(t: any, rootDir: string): { dir: string; def: CaseDefinition }[] {
-    const cases: { dir: string; def: CaseDefinition }[] = [];
-    let entries: any[];
-    try { entries = [...t.testsys.readDirSync(rootDir)]; } catch { return cases; }
-    for (const entry of entries) {
-        if (!entry.isDirectory) continue;
-        const caseDir = join(rootDir, entry.name);
+/** Read a text file from a directory handle. */
+async function readText(dir: DirHandle, name: string): Promise<string> {
+    const fh = await dir.getFileHandle(name);
+    const file = await fh.getFile();
+    return file.text();
+}
+
+/** Navigate to a subdirectory handle by walking path segments. */
+async function subdir(parent: DirHandle, path: string): Promise<DirHandle> {
+    let current = parent;
+    for (const segment of path.split("/").filter(Boolean)) {
+        current = await current.getDirectoryHandle(segment);
+    }
+    return current;
+}
+
+// ── Case Discovery ───────────────────────────────────────────────────────────
+
+/** Discover all cases.json files recursively under a directory handle. */
+export async function discoverCases(
+    rootDir: DirHandle
+): Promise<{ dir: DirHandle; def: CaseDefinition }[]> {
+    const cases: { dir: DirHandle; def: CaseDefinition }[] = [];
+    for await (const [name, handle] of rootDir.entries()) {
+        if (handle.kind !== "directory") continue;
         try {
-            const raw = t.testsys.readTextFileSync(join(caseDir, "cases.json"));
+            const raw = await readText(handle, "cases.json");
             const defs: CaseDefinition[] = JSON.parse(raw);
-            for (const def of defs) {
-                cases.push({ dir: caseDir, def });
-            }
+            for (const def of defs) cases.push({ dir: handle, def });
         } catch {
-            // Recurse into subdirectories (e.g. sandbox/webrun/, sandbox/os/).
-            cases.push(...discoverCases(t, caseDir));
+            // Recurse into subdirectories.
+            cases.push(...await discoverCases(handle));
         }
     }
     return cases;
 }
 
-// Run a batch-mode case: spawn, wait for exit, assert.
-export async function runBatchCase(t: any, caseDir: string, def: CaseDefinition): Promise<void> {
-    const runDir = t.testsys.realPathSync(t.testsys.makeTempDirSync({ prefix: "case_" }));
-    copyDirRecursive(t, caseDir, runDir);
+// ── Runners ──────────────────────────────────────────────────────────────────
 
-    const cwd = def.cwd ? join(runDir, def.cwd) : runDir;
+/** Run a batch-mode case: spawn via ctx.webrun(), wait for exit, assert. */
+export async function runBatchCase(caseDir: DirHandle, def: CaseDefinition): Promise<void> {
+    const runDir = await makeTempDir();
+    await copyDir(caseDir, runDir);
+
+    const cwd = def.cwd ? await subdir(runDir, def.cwd) : runDir;
     const args = def.args || ["--module", "main.ts"];
 
-    const proc = new t.testsys.Command(t.WORKER_BIN, {
-        args, cwd, env: def.env, stdout: "piped", stderr: "piped"
-    }).spawn();
-
-    const decoder = new TextDecoder();
-    let stdout = "", stderr = "";
-
-    const readStream = async (stream: any, isStdout: boolean) => {
-        const reader = stream.getReader();
-        try {
-            while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
-                if (isStdout) stdout += decoder.decode(value);
-                else stderr += decoder.decode(value);
-            }
-        } catch (_) {}
-    };
-
-    const timer = setTimeout(() => {
-        try { proc.kill("SIGTERM"); } catch (_) {}
-    }, 30_000);
-
-    const [status] = await Promise.all([
-        proc.status,
-        readStream(proc.stdout, true),
-        readStream(proc.stderr, false)
-    ]);
-
-    clearTimeout(timer);
-    try { t.testsys.removeSync(runDir, { recursive: true }); } catch (_) {}
-
-    assertExitCode(def.expect, status.code, stdout, stderr);
-    assertOutput(def.expect, stdout, stderr);
-}
-
-// Run a signal-mode case: stream, wait for ready, HTTP probe, signal, assert.
-export async function runSignalCase(t: any, caseDir: string, def: CaseDefinition): Promise<void> {
-    const runDir = t.testsys.realPathSync(t.testsys.makeTempDirSync({ prefix: "case_" }));
-    copyDirRecursive(t, caseDir, runDir);
-
-    const cwd = def.cwd ? join(runDir, def.cwd) : runDir;
-    const args = def.args || ["--serve", "."];
-
-    const proc = new t.testsys.Command(t.WORKER_BIN, {
-        args, cwd, env: def.env, stdout: "piped", stderr: "piped"
-    }).spawn();
-
-    const decoder = new TextDecoder();
-    let stdout = "", stderr = "";
-    const deadline = def.timeout_ms ?? 10_000;
-
-    let onChunk: (() => void) | null = null;
-    const readyPromise = new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(() => {
-            try { proc.kill("SIGTERM"); } catch (_) {}
-            reject(new Error(`Timed out after ${deadline}ms waiting for ready\nSTDOUT:\n${stdout}\nSTDERR:\n${stderr}`));
-        }, deadline);
-
-        if (!def.expect.ready) {
-            clearTimeout(timer);
-            resolve();
-            return;
-        }
-
-        onChunk = () => {
-            const ready = def.expect.ready!;
-            const stdoutOk = !ready.stdout || ready.stdout.every(r => !r.contains || stdout.includes(r.contains));
-            const stderrOk = !ready.stderr || ready.stderr.every(r => !r.contains || stderr.includes(r.contains));
-            if (stdoutOk && stderrOk) {
-                clearTimeout(timer);
-                onChunk = null;
-                resolve();
-            }
-        };
+    const result = await webrun(args, {
+        cwd,
+        env: def.env,
+        timeoutMillis: 30_000,
     });
 
-    const readStream = async (stream: any, isStdout: boolean) => {
-        const reader = stream.getReader();
-        try {
-            while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
-                if (isStdout) stdout += decoder.decode(value);
-                else stderr += decoder.decode(value);
-                if (onChunk) onChunk();
-            }
-        } catch (_) {}
-    };
+    assertExitCode(def.expect, result.exitCode, result.stdout || "", result.stderr || "");
+    assertOutput(def.expect, result.stdout || "", result.stderr || "");
+}
 
-    const stdoutDone = readStream(proc.stdout, true);
-    const stderrDone = readStream(proc.stderr, false);
+/** Run a signal-mode case: stream output, wait for ready, HTTP probe, signal, assert. */
+export async function runSignalCase(caseDir: DirHandle, def: CaseDefinition): Promise<void> {
+    const runDir = await makeTempDir();
+    await copyDir(caseDir, runDir);
 
-    try {
-        await readyPromise;
-    } catch (e) {
-        await Promise.allSettled([proc.status, stdoutDone, stderrDone]);
-        try { t.testsys.removeSync(runDir, { recursive: true }); } catch (_) {}
-        throw e;
+    const cwd = def.cwd ? await subdir(runDir, def.cwd) : runDir;
+    const args = def.args || ["--serve", "."];
+    const deadline = def.timeout_ms ?? 10_000;
+
+    // Create writable streams for stdout/stderr capture.
+    let stdout = "", stderr = "";
+    let onChunk: (() => void) | null = null;
+
+    const stdoutStream = new WritableStream<Uint8Array>({
+        write(chunk) {
+            stdout += new TextDecoder().decode(chunk);
+            if (onChunk) onChunk();
+        }
+    });
+    const stderrStream = new WritableStream<Uint8Array>({
+        write(chunk) {
+            stderr += new TextDecoder().decode(chunk);
+            if (onChunk) onChunk();
+        }
+    });
+
+    const controller = new AbortController();
+
+    const resultPromise = webrun(args, {
+        cwd,
+        env: def.env,
+        stdout: stdoutStream,
+        stderr: stderrStream,
+        signal: controller.signal,
+        timeoutMillis: deadline + 5_000,
+    });
+
+    // Wait for the ready condition.
+    if (def.expect.ready) {
+        await new Promise<void>((resolve, reject) => {
+            const timer = setTimeout(() => {
+                controller.abort();
+                reject(new Error(`Timed out after ${deadline}ms waiting for ready\nSTDOUT:\n${stdout}\nSTDERR:\n${stderr}`));
+            }, deadline);
+
+            onChunk = () => {
+                const ready = def.expect.ready!;
+                const stdoutOk = !ready.stdout || ready.stdout.every(r => !r.contains || stdout.includes(r.contains));
+                const stderrOk = !ready.stderr || ready.stderr.every(r => !r.contains || stderr.includes(r.contains));
+                if (stdoutOk && stderrOk) {
+                    clearTimeout(timer);
+                    onChunk = null;
+                    resolve();
+                }
+            };
+            // Check immediately in case ready output was already captured.
+            onChunk();
+        });
     }
 
     // HTTP probes.
@@ -186,7 +192,7 @@ export async function runSignalCase(t: any, caseDir: string, def: CaseDefinition
     if (def.expect.http && port) {
         for (const probe of def.expect.http) {
             const url = `http://127.0.0.1:${port}${probe.path}`;
-            const res = await t.testsys.nativeFetch(url, {
+            const res = await fetch(url, {
                 method: probe.method || "GET",
                 headers: probe.request_headers,
                 body: probe.request_body,
@@ -217,13 +223,15 @@ export async function runSignalCase(t: any, caseDir: string, def: CaseDefinition
         }
     }
 
-    try { proc.kill(def.signal || "SIGTERM"); } catch (_) {}
-    const [status] = await Promise.all([proc.status, stdoutDone, stderrDone]);
-    try { t.testsys.removeSync(runDir, { recursive: true }); } catch (_) {}
+    // Signal the process to stop and wait for exit.
+    controller.abort(def.signal || "SIGTERM");
+    const result = await resultPromise;
 
-    assertExitCode(def.expect, status.code, stdout, stderr);
+    assertExitCode(def.expect, result.exitCode, stdout, stderr);
     assertOutput(def.expect, stdout, stderr);
 }
+
+// ── Assertions ───────────────────────────────────────────────────────────────
 
 function assertExitCode(expect: CaseExpect, code: number, stdout: string, stderr: string) {
     if (expect.exit_code === "nonzero") {

@@ -1,5 +1,5 @@
 // webrun.ts — DI construction site. Captures globalThis.Deno and threads it.
-import { spawnSandboxProcess } from "./src/host.ts";
+import { spawnSandboxProcess } from "./src/host/mod.ts";
 import { executeInsideSandbox } from "./src/guest.ts";
 export { executeInsideSandbox };
 export { parseRawArguments, parseCommandInvocation } from "./src/config.ts";
@@ -133,16 +133,18 @@ if (!isWorker) {
         }
 
         if (payloadData.action === "test") {
-            // Create UDP relay inline and pass port directly.
-            const { port1, cleanup } = setupUdpRelay();
-            payloadData.__udpPort = port1;
+            // WebRTC: only allocate the UDP relay when explicitly enabled.
+            const webrtcEnabled = !!payloadData.config?.permissions?.webrtc;
+            const relay = webrtcEnabled ? setupUdpRelay() : null;
+            if (relay) payloadData.__udpPort = relay.port1;
             try {
                 await executeInsideSandbox(globalThis.Deno, payloadData);
             } finally {
-                cleanup();
+                relay?.cleanup();
             }
         } else {
-            const { port1, cleanup } = setupUdpRelay();
+            const webrtcEnabled = !!payloadData.config?.permissions?.webrtc;
+            const relay = webrtcEnabled ? setupUdpRelay() : null;
 
             const workerCode = `
                 import { executeInsideSandbox } from "${import.meta.url}";
@@ -167,18 +169,22 @@ if (!isWorker) {
             
             worker.onmessage = (e) => {
                 if (e.data && e.data.type === "exit") {
-                    cleanup();
+                    relay?.cleanup();
                     Deno.exit(e.data.code);
                 }
             };
             worker.onerror = (e) => {
-                cleanup();
+                relay?.cleanup();
                 Deno.exit(1);
             };
             
-            // Transfer the UDP port into the worker as a Transferable
-            payloadData.__udpPort = port1;
-            worker.postMessage(payloadData, [port1]);
+            // Transfer the UDP port into the worker as a Transferable (only when WebRTC is enabled).
+            const transferables: Transferable[] = [];
+            if (relay) {
+                payloadData.__udpPort = relay.port1;
+                transferables.push(relay.port1);
+            }
+            worker.postMessage(payloadData, transferables);
             await new Promise(() => {}); // Wait forever until sys.exit is called
         }
     } else if (import.meta.main) {

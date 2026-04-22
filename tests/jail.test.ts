@@ -1,6 +1,6 @@
 import { dirname } from "https://deno.land/std@0.224.0/path/mod.ts";
-import { buildJailConfig, buildLandlockPolicy, buildSubcommand, buildNetworkFlags, generateSeatbeltProfile, SYSTEM_READ_PATHS } from "../src/jail.ts";
-import { computeOpfsPathId } from "../src/host.ts";
+import { buildJailConfig, buildSubcommand, buildNetworkFlags, generateSeatbeltProfile, SYSTEM_READ_PATHS, resolveCapabilities, toLandlockPolicy } from "../src/jail.ts";
+import { computeOpfsPathId } from "../src/host/opfs.ts";
 import { evaluateEnclavePolicy } from "../src/policy.ts";
 
 // Mock JailRuntime for pure-function testing (no I/O).
@@ -39,6 +39,7 @@ const DEFAULT_PATHS = {
     opfsTmp: "/tmp/webrun-opfs",
     bindingSdksTmp: "/tmp/webrun-bindings",
     webrunEntryPath: "/opt/webrun/webrun.ts",
+    isSourceMode: true,
 };
 
 export async function testJailDispatch(t: any) {
@@ -47,7 +48,8 @@ export async function testJailDispatch(t: any) {
     await t.run("buildJailConfig dispatches to seatbelt on darwin", async () => {
         const sys = mockSys();
         const policy = mockPolicy();
-        const result = buildJailConfig(sys, "darwin", policy, ["run", "main.ts"], DEFAULT_PATHS, [], false);
+        const caps = resolveCapabilities(sys, policy, DEFAULT_PATHS, [], false, "darwin", [], []);
+        const result = buildJailConfig(sys, "darwin", caps, ["run", "main.ts"], DEFAULT_PATHS);
         if (result.baseCmd !== "/usr/bin/sandbox-exec") {
             throw new Error(`Expected baseCmd /usr/bin/sandbox-exec, got ${result.baseCmd}`);
         }
@@ -62,7 +64,8 @@ export async function testJailDispatch(t: any) {
     await t.run("buildJailConfig dispatches to Landlock on linux", async () => {
         const sys = mockSys();
         const policy = mockPolicy();
-        const result = buildJailConfig(sys, "linux", policy, ["run", "main.ts"], DEFAULT_PATHS, [], false);
+        const caps = resolveCapabilities(sys, policy, DEFAULT_PATHS, [], false, "linux", [], []);
+        const result = buildJailConfig(sys, "linux", caps, ["run", "main.ts"], DEFAULT_PATHS);
         if (result.baseCmd !== "/usr/bin/deno") {
             throw new Error(`Expected baseCmd to be deno, got ${result.baseCmd}`);
         }
@@ -78,7 +81,8 @@ export async function testJailDispatch(t: any) {
         const sys = mockSys();
         const policy = mockPolicy();
         const args = ["run", "main.ts"];
-        const result = buildJailConfig(sys, "none", policy, args, DEFAULT_PATHS, [], false);
+        const caps = resolveCapabilities(sys, policy, DEFAULT_PATHS, [], false, "none", [], []);
+        const result = buildJailConfig(sys, "none", caps, args, DEFAULT_PATHS);
         if (result.baseCmd !== "/usr/bin/deno") {
             throw new Error(`Expected baseCmd to be deno, got ${result.baseCmd}`);
         }
@@ -93,7 +97,8 @@ export async function testJailDispatch(t: any) {
     await t.run("buildJailConfig passes through on unknown OS", async () => {
         const sys = mockSys();
         const policy = mockPolicy();
-        const result = buildJailConfig(sys, "freebsd", policy, ["run", "main.ts"], DEFAULT_PATHS, [], false);
+        const caps = resolveCapabilities(sys, policy, DEFAULT_PATHS, [], false, "freebsd", [], []);
+        const result = buildJailConfig(sys, "freebsd", caps, ["run", "main.ts"], DEFAULT_PATHS);
         if (result.baseCmd !== "/usr/bin/deno") {
             throw new Error(`Expected baseCmd to be deno, got ${result.baseCmd}`);
         }
@@ -168,7 +173,7 @@ export async function testJailDispatch(t: any) {
         {
             name: "source directory NOT readable when entry is bundled",
             policy: mockPolicy(),
-            paths: { ...DEFAULT_PATHS, webrunEntryPath: "/opt/webrun/webrun" },
+            paths: { ...DEFAULT_PATHS, webrunEntryPath: "/opt/webrun/webrun", isSourceMode: false },
             expect: (p: any) => !p.read_paths.includes("/opt/webrun"),
         },
         {
@@ -210,7 +215,8 @@ export async function testJailDispatch(t: any) {
             const paths = (test as any).paths || DEFAULT_PATHS;
             const ephemeralPorts = (test as any).ephemeralPorts || [];
             const allowGpu = (test as any).allowGpu || false;
-            const result = buildLandlockPolicy(sys, test.policy, paths, ephemeralPorts, allowGpu);
+            const caps = resolveCapabilities(sys, test.policy, paths, ephemeralPorts, allowGpu, "linux", [], []);
+            const result = toLandlockPolicy(caps);
             if (!test.expect(result)) {
                 throw new Error(`Assertion failed for "${test.name}"\nPolicy: ${JSON.stringify(result, null, 2)}`);
             }
@@ -362,23 +368,31 @@ export async function testHomePathContainment(t: any) {
 
     for (const tc of blockedCases) {
         await t.run(`evaluateEnclavePolicy: ${tc.name}`, async () => {
-            let exitCalled = false;
             const mockSys = {
                 env: { get: () => undefined },
-                exit: () => { exitCalled = true; },
+                exit: () => {},
                 readTextFileSync: () => "",
                 statSync: () => ({ isFile: true }),
                 writeTextFileSync: () => {},
                 realPathSync: (p: string) => p,
             } as any;
 
-            evaluateEnclavePolicy(
-                mockSys, tc.configDirs, [], "/project", "/project", "/tmp/isolated"
-            );
+            let threw = false;
+            try {
+                evaluateEnclavePolicy(
+                    mockSys, tc.configDirs, [], "/project", "/project", "/tmp/isolated"
+                );
+            } catch (e: any) {
+                if (e.name === "SecurityViolationError") {
+                    threw = true;
+                } else {
+                    throw e;
+                }
+            }
 
-            if (!exitCalled) {
+            if (!threw) {
                 throw new Error(
-                    `evaluateEnclavePolicy should have called exit() — ` +
+                    `evaluateEnclavePolicy should have thrown SecurityViolationError — ` +
                     `the containment check must block paths outside configDir`
                 );
             }
@@ -387,10 +401,9 @@ export async function testHomePathContainment(t: any) {
 
     // ~ treated literally — resolves within configDir, no expansion
     await t.run("evaluateEnclavePolicy: ~/path is treated literally (no expansion)", async () => {
-        let exitCalled = false;
         const mockSys = {
             env: { get: () => undefined },
-            exit: () => { exitCalled = true; },
+            exit: () => { throw new Error("exit should not be called"); },
             readTextFileSync: () => "",
             statSync: () => ({ isFile: true }),
             writeTextFileSync: () => {},
@@ -401,9 +414,6 @@ export async function testHomePathContainment(t: any) {
             mockSys, { "~/.ssh": { access: "read" } }, [], "/project", "/project", "/tmp/isolated"
         );
 
-        if (exitCalled) {
-            throw new Error("~/path should not be rejected — ~ is a literal path character");
-        }
         if (!policy.allowedReadPaths.includes("/project/~/.ssh")) {
             throw new Error(
                 `Expected /project/~/.ssh in allowedReadPaths (literal ~), ` +

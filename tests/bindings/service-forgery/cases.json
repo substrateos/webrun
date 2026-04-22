@@ -1,7 +1,18 @@
 [
   {
     "name": "UUID Forgery & Null Routing: Explicitly rejects standard fetch calls aiming directly at native ports or unlisted UUIDs",
-    "args": ["--module", "test.js"],
-    "expect": { "exit_code": 0, "stdout": [{"contains": "FORGERY_BLOCK_OK"}] }
+    "args": [
+      "--module",
+      "test.js"
+    ],
+    "expect": {
+      "exit_code": 0,
+      "stdout": [
+        {
+          "contains": "FORGERY_BLOCK_OK"
+        }
+      ]
+    },
+    "runner": "cli"
   }
 ]

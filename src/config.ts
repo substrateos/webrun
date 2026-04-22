@@ -1,5 +1,4 @@
 import { resolve, dirname, join } from "https://deno.land/std@0.224.0/path/mod.ts";
-import { tryRealpathSync } from "./sys.ts";
 import { printUsageError, printWarning, printExecutionError, printFatalError, printSecurityFatal } from "./log.ts";
 import { WebrunConfig, CommandInvocation, SandboxContextPayload, ConfigRuntime, adaptGlobalRuntime } from "./types.ts";
 // =========================================================
@@ -267,15 +266,17 @@ export function parseCommandInvocation(sysOrArgs: ConfigRuntime | string[], args
         const isUrl = resolvedTarget.startsWith("http://") || resolvedTarget.startsWith("https://") || resolvedTarget.startsWith("data:");
         if (!isUrl) {
             try {
-                const stat = sys.statSync(resolvedTarget);
-                if (stat.isDirectory && action !== "serve") {
-                    throw new Error(`The specified module '${resolvedTarget}' is a directory, not a file.`);
-                }
+                // Read a tiny chunk to check if file exists and is not a directory
+                // If it's a directory, readTextFileSync will throw 'Is a directory'
+                // If it doesn't exist, it will throw 'No such file'
+                sys.readTextFileSync(resolvedTarget);
             } catch (e: any) {
                 if (e.message?.includes("No such file")) {
                     throw new Error(`The specified module '${resolvedTarget}' does not exist.`);
                 }
-                if (e.message?.includes("is a directory")) throw e;
+                if (e.message?.includes("is a directory") && action !== "serve") {
+                    throw new Error(`The specified module '${resolvedTarget}' is a directory, not a file.`);
+                }
             }
         }
     }
@@ -310,10 +311,9 @@ export function computeRuntimeEnvironment(sys: ConfigRuntime, allowedEnv: string
     return finalEnvVars;
 }
 
-export function generateBaseImportMap(): any {
-    const sinkholeURI = "data:text/javascript,export default null; throw new Error('Security Error: Node/NPM modules are blocked.');";
+const SINKHOLE_URI = "data:text/javascript,export default null; throw new Error('Security Error: Node/NPM modules are blocked.');";
 
-    const contextCode = `
+const CTX_CODE = `
 export let args = [];
 export let flags = {};
 export let env = {};
@@ -349,16 +349,12 @@ export function set(ctx) {
 }
 
 export async function webrun(spawnArgs, options = {}) {
-    if (spawnArgs.includes("--test")) {
-        throw new Error("not yet implemented");
-    }
     if (!__spawnChild) {
         throw new Error("webrun: spawn function not available (context not initialized)");
     }
 
     const enc = new TextEncoder();
 
-    // Acquire writers upfront -- throws clearly if the stream is already locked.
     let stdoutWriter;
     let stderrWriter;
     try {
@@ -368,13 +364,15 @@ export async function webrun(spawnArgs, options = {}) {
         throw new Error(\`webrun: cannot acquire stream writer -- stream may already be locked: \${err.message}\`);
     }
 
-    // Resolve CWD path if provided.
     let cwdPath = undefined;
-    if (options.cwd && typeof __resolvePath === "function") {
-        cwdPath = __resolvePath(options.cwd);
+    if (options.cwd) {
+        if (typeof options.cwd === "string") {
+            cwdPath = options.cwd;
+        } else if (typeof __resolvePath === "function") {
+            cwdPath = __resolvePath(options.cwd);
+        }
     }
 
-    // Build abort promise if signal provided.
     let abortPromise = undefined;
     if (options.signal) {
         if (options.signal.aborted) {
@@ -383,7 +381,7 @@ export async function webrun(spawnArgs, options = {}) {
             return { exitCode: 143 };
         }
         abortPromise = new Promise((resolve) => {
-            options.signal.addEventListener("abort", () => resolve(undefined), { once: true });
+            options.signal.addEventListener("abort", () => resolve(options.signal.reason), { once: true });
         });
     }
 
@@ -398,7 +396,6 @@ export async function webrun(spawnArgs, options = {}) {
         onStderr: stderrWriter ? (chunk) => stderrWriter.write(new TextEncoder().encode(chunk + nl)) : undefined,
     });
 
-    // Release stream locks.
     try { stdoutWriter?.close(); } catch (_) {}
     try { stderrWriter?.close(); } catch (_) {}
 
@@ -408,16 +405,33 @@ export async function webrun(spawnArgs, options = {}) {
     return r;
 }
 `;
-    const contextURI = `data:application/typescript;charset=utf-8,${encodeURIComponent(contextCode)}`;
+const CTX_URI = `data:application/typescript;charset=utf-8,${encodeURIComponent(CTX_CODE)}`;
 
-    // Scope for the pre-compiled webrtc bundle: trusted internal code that
-    // needs real Node built-in access via Deno's compat layer.
+/** Security imports: maps all node:* builtins to a sinkhole that throws. */
+export function buildSinkholeImports(): Record<string, string> {
+    return {
+        "node:fs": SINKHOLE_URI,
+        "node:child_process": SINKHOLE_URI,
+        "node:dgram": SINKHOLE_URI,
+        "node:net": SINKHOLE_URI,
+        "node:os": SINKHOLE_URI,
+        "node:path": SINKHOLE_URI,
+        "node:vm": SINKHOLE_URI,
+    };
+}
+
+/** Context module: maps webrun/ctx to the inline data URI. */
+export function buildCtxImport(): Record<string, string> {
+    return { "webrun/ctx": CTX_URI };
+}
+
+/**
+ * WebRTC scopes: grants node builtin passthrough to trusted internal code
+ * (the pre-compiled werift bundle and the webrun entry itself).
+ * CLI-only — browsers use native WebRTC.
+ */
+export function buildWebRTCScopes(): Record<string, Record<string, string>> {
     const internalScopeUrl = new URL("./internal/", import.meta.url).href;
-
-    // The webrun entry itself (and its parent directory) need access to node
-    // builtins because the esbuild bundle inlines werift code that imports them.
-    // When running bundled, the entry is a temp .js file — its URL differs from
-    // the internal/ scope, so we need to whitelist it separately.
     const selfUrl = import.meta.url;
     const selfDirUrl = new URL("./", import.meta.url).href;
 
@@ -432,25 +446,29 @@ export async function webrun(spawnArgs, options = {}) {
         "node:tls": "node:tls",
         "node:module": "node:module",
         "node:perf_hooks": "node:perf_hooks",
-        "node:dgram": sinkholeURI,  // dgram stays blocked even for internals
+        "node:dgram": SINKHOLE_URI,
     };
 
     return {
-        imports: {
-            "webrun/ctx": contextURI,
-            "node:fs": sinkholeURI,
-            "node:child_process": sinkholeURI,
-            "node:dgram": sinkholeURI,
-            "node:net": sinkholeURI,
-            "node:os": sinkholeURI,
-            "node:path": sinkholeURI,
-            "node:vm": sinkholeURI,
-        },
-        scopes: {
-            [internalScopeUrl]: nodePassthrough,
-            [selfDirUrl]: nodePassthrough,
-            [selfUrl]: nodePassthrough,
-        }
+        [internalScopeUrl]: nodePassthrough,
+        [selfDirUrl]: nodePassthrough,
+        [selfUrl]: nodePassthrough,
+    };
+}
+
+/**
+ * Composes all import map concerns into a single map.
+ *
+ * WebRTC scopes are always included because they're URL-scoped to trusted
+ * internal code (the werift bundle and the webrun entry). In bundled binaries,
+ * deno bundle inlines dynamic imports, so the bundle.js top-level node:*
+ * imports execute unconditionally — the scopes must be present to prevent
+ * the sinkhole from blocking them.
+ */
+export function generateBaseImportMap(): any {
+    return {
+        imports: { ...buildSinkholeImports(), ...buildCtxImport() },
+        scopes: { ...buildWebRTCScopes() },
     };
 }
 
@@ -487,9 +505,18 @@ export function rewriteImportMapPathsToAbsolute(userMap: any, baseDir: string): 
     }
 }
 
+/** Keys that user import maps must never override. */
+const PROTECTED_IMPORT_KEYS = new Set([
+    ...Object.keys(buildSinkholeImports()),
+    ...Object.keys(buildCtxImport()),
+]);
+
 export function mergeImportMaps(targetMap: any, sourceMap: any): void {
     if (sourceMap.imports) {
-        Object.assign(targetMap.imports, sourceMap.imports);
+        for (const [key, value] of Object.entries(sourceMap.imports)) {
+            if (PROTECTED_IMPORT_KEYS.has(key)) continue;
+            targetMap.imports[key] = value;
+        }
     }
     if (sourceMap.scopes) {
         for (const [scopeKey, scopeValue] of Object.entries(sourceMap.scopes)) {

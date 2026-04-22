@@ -30,6 +30,11 @@ export interface SandboxPaths {
     opfsTmp: string;
     bindingSdksTmp: string;
     webrunEntryPath: string;
+    /**
+     * True when running from unbundled .ts source. Resolved once at the host
+     * boundary — jail backends never inspect file extensions.
+     */
+    isSourceMode: boolean;
 }
 
 /**
@@ -55,6 +60,106 @@ export const SYSTEM_READ_PATHS = {
 } as const;
 
 /**
+ * Fully resolved capability set — single source of truth for all jail backends.
+ * Computed once from EnclavePolicy + SandboxPaths. Each backend translates
+ * this structure into its native format without duplicating path resolution.
+ */
+export interface ResolvedCapabilities {
+    readPaths: string[];     // fully canonicalized
+    writePaths: string[];
+    execPaths: string[];
+    networkConnect: number[];   // tcp connect ports
+    networkBind: number[];      // tcp bind ports
+    env: string[] | "*";
+    gpu: boolean;
+    networkFlags: string[];     // pre-built Deno network flags
+    isLinux: boolean;
+    /** Allowed remote import hosts. Empty = no --allow-import. ["*"] = bare --allow-import. */
+    importHosts: string[];
+}
+
+/**
+ * Resolves all capabilities once from policy, paths, and runtime info.
+ * This is the single site that performs path canonicalization, source-mode
+ * expansion, and system dependency inclusion. All jail backends consume
+ * the output without re-deriving any of these decisions.
+ */
+export function resolveCapabilities(
+    sys: JailRuntime,
+    policy: EnclavePolicy,
+    paths: SandboxPaths,
+    ephemeralPorts: number[],
+    allowGpu: boolean,
+    os: string,
+    networkFlags: string[],
+    envPermissions: string[],
+    importHosts: string[] = [],
+): ResolvedCapabilities {
+    const canon = (p: string) => tryRealpathSync(sys, p) || p;
+    const isLinux = os === "linux";
+
+    // --- Read paths ---
+    const readPaths = [
+        canon(dirname(sys.execPath())),  // runtime binary dir
+        canon(paths.webrunEntryPath),    // webrun source/bundle
+        ...policy.allowedReadPaths.map(canon),
+        canon(paths.runnerTmp),
+        canon(paths.bindingSdksTmp),
+        canon(paths.localCacheDir),
+        paths.isolatedTmp,
+        paths.opfsTmp,
+    ];
+
+    // Grant read access to the surrounding source directory when running
+    // from unbundled .ts source (needs to dynamically import sibling files).
+    if (paths.isSourceMode) {
+        const unresolvedDir = dirname(paths.webrunEntryPath);
+        const srcDir = canon(unresolvedDir);
+        readPaths.push(srcDir);
+        if (srcDir !== unresolvedDir) readPaths.push(unresolvedDir);
+    }
+
+    // Linux Landlock needs O_PATH access to system paths before applying
+    // irreversible restrictions.
+    if (isLinux) {
+        readPaths.push(...SYSTEM_READ_PATHS.linux);
+    }
+
+    // --- Write paths ---
+    const writePaths = [
+        canon(paths.isolatedTmp),
+        canon(paths.runnerTmp),
+        canon(paths.opfsTmp),
+        canon(paths.localCacheDir),
+        ...policy.allowedWritePaths.map(canon),
+    ];
+
+    // --- Exec paths ---
+    const execPaths = [canon(sys.execPath())];
+
+    // --- Env ---
+    let env: string[] | "*";
+    if (envPermissions.length === 1 && envPermissions[0] === "*") {
+        env = "*";
+    } else {
+        env = ["TMP_DIR", ...envPermissions.filter(e => e !== "TMP_DIR")];
+    }
+
+    return {
+        readPaths,
+        writePaths,
+        execPaths,
+        networkConnect: [80, 443, ...ephemeralPorts],
+        networkBind: ephemeralPorts,
+        env,
+        gpu: allowGpu,
+        networkFlags,
+        isLinux,
+        importHosts,
+    };
+}
+
+/**
  * Top-level dispatch — selects the jail backend for the current OS.
  *
  * On "darwin": computes a macOS seatbelt profile and wraps via /usr/bin/sandbox-exec.
@@ -64,32 +169,21 @@ export const SYSTEM_READ_PATHS = {
 export function buildJailConfig(
     sys: JailRuntime,
     os: string,
-    policy: EnclavePolicy,
+    caps: ResolvedCapabilities,
     innerRuntimeArgs: string[],
     paths: SandboxPaths,
-    ephemeralPorts: number[],
-    allowGpu: boolean,
     hasNetwork: boolean = false,
-    /**
-     * @deprecated Legacy bridge: absolute path to the webrun binary.
-     * When set, grants process-fork + process-exec in the seatbelt
-     * and --allow-run in Deno so testsys.Command can spawn children.
-     * Remove alongside testCapabilities in Phase E.
-     */
-    legacyRunBin?: string,
 ): JailConfig {
     if (os === "darwin") {
-        const { readEnclaves, writeEnclaves } = generateSeatbeltEnclaveStrings(
-            sys, policy, paths.runnerTmp, paths.opfsTmp, paths.bindingSdksTmp, paths.webrunEntryPath
-        );
+        const { readEnclaves, writeEnclaves } = toSeatbeltEnclaves(caps);
         const seatbeltProfile = generateSeatbeltProfile(
-            paths.cwd, readEnclaves, writeEnclaves, ephemeralPorts, allowGpu, hasNetwork, legacyRunBin
+            paths.cwd, readEnclaves, writeEnclaves, caps.networkBind, caps.gpu, hasNetwork
         );
-        return buildDarwinJailConfig(sys, seatbeltProfile, paths, innerRuntimeArgs, legacyRunBin);
+        return buildDarwinJailConfig(sys, seatbeltProfile, paths, innerRuntimeArgs);
     }
 
     if (os === "linux") {
-        const landlockPolicy = buildLandlockPolicy(sys, policy, paths, ephemeralPorts, allowGpu);
+        const landlockPolicy = toLandlockPolicy(caps);
         return buildLinuxJailConfig(sys, innerRuntimeArgs, landlockPolicy);
     }
 
@@ -107,13 +201,8 @@ function buildDarwinJailConfig(
     seatbeltProfile: string,
     paths: SandboxPaths,
     innerRuntimeArgs: string[],
-    /** @deprecated Legacy bridge: when set, WEBRUN_DENO_DIR is exposed to the seatbelt so the bash wrapper can find Deno. */
-    legacyRunBin?: string,
 ): JailConfig {
-    // The Deno binary lives at execPath(). Its parent directory is the
-    // version-specific dir where the bash wrapper expects to find `deno`.
     const denoBin = sys.execPath();
-    const denoDir = dirname(denoBin);
     return {
         baseCmd: "/usr/bin/sandbox-exec",
         execArgs: [
@@ -126,11 +215,10 @@ function buildDarwinJailConfig(
             "-D", `WEBRUN_SCRIPT_PATH=${paths.webrunEntryPath}`,
             "-D", `WEBRUN_EXEC_DIR=${dirname(denoBin)}`,
             "-D", `WEBRUN_EXEC_PATH=${denoBin}`,
-            ...(legacyRunBin ? ["-D", `WEBRUN_DENO_DIR=${denoDir}`] : []),
             denoBin,
             ...innerRuntimeArgs
         ],
-        extraEnv: legacyRunBin ? { WEBRUN_DENO_DIR: denoDir } : {},
+        extraEnv: {},
     };
 }
 
@@ -154,53 +242,17 @@ function buildLinuxJailConfig(
 }
 
 /**
- * Translates EnclavePolicy + SandboxPaths into a LandlockPolicy.
- * All paths are canonicalized via tryRealpathSync since Landlock
- * operates on inodes, not path strings.
+ * Pure translator: ResolvedCapabilities → LandlockPolicy.
+ * No path resolution, no file-extension checks — just format conversion.
  */
-export function buildLandlockPolicy(
-    sys: JailRuntime,
-    policy: EnclavePolicy,
-    paths: SandboxPaths,
-    ephemeralPorts: number[],
-    allowGpu: boolean,
-): LandlockPolicy {
-    const canon = (p: string) => tryRealpathSync(sys, p) || p;
-
-    const readPaths = [
-        ...SYSTEM_READ_PATHS.linux,
-        canon(dirname(sys.execPath())),  // runtime binary dir
-        canon(paths.webrunEntryPath),    // webrun source/bundle
-        ...policy.allowedReadPaths.map(canon),
-        canon(paths.runnerTmp),
-        canon(paths.bindingSdksTmp),
-        canon(paths.localCacheDir),
-    ];
-
-    // Only grant read access to the surrounding source directory if running
-    // from the raw, unbundled source code.
-    if (paths.webrunEntryPath.endsWith(".ts")) {
-        const srcDir = canon(dirname(paths.webrunEntryPath));
-        readPaths.push(srcDir);
-    }
-
-    const writePaths = [
-        canon(paths.isolatedTmp),
-        canon(paths.runnerTmp),
-        canon(paths.opfsTmp),
-        canon(paths.localCacheDir),
-        ...policy.allowedWritePaths.map(canon),
-    ];
-
-    const execPaths = [canon(sys.execPath())];
-
+export function toLandlockPolicy(caps: ResolvedCapabilities): LandlockPolicy {
     return {
-        read_paths: readPaths,
-        write_paths: writePaths,
-        exec_paths: execPaths,
-        tcp_connect_ports: [80, 443, ...ephemeralPorts],
-        tcp_bind_ports: ephemeralPorts,
-        gpu: allowGpu,
+        read_paths: caps.readPaths,
+        write_paths: caps.writePaths,
+        exec_paths: caps.execPaths,
+        tcp_connect_ports: caps.networkConnect,
+        tcp_bind_ports: caps.networkBind,
+        gpu: caps.gpu,
     };
 }
 
@@ -216,6 +268,8 @@ export interface DenoPermissionSet {
     ffi: boolean;
     sys: string[];
     import: boolean;
+    /** Allowed remote import hosts. Empty when import=false. */
+    importHosts: string[];
 }
 
 /** Converts a DenoPermissionSet into Deno CLI --allow-* / --deny-* flags. */
@@ -242,105 +296,56 @@ export function serializePermissions(p: DenoPermissionSet): string[] {
 
     if (p.ffi) flags.push("--allow-ffi");
     if (p.sys.length > 0) flags.push(`--allow-sys=${p.sys.join(",")}`);
-    if (p.import) flags.push("--allow-import");
+    if (p.import) {
+        if (p.importHosts.length === 0) {
+            flags.push("--allow-import");
+        } else {
+            flags.push(`--allow-import=${p.importHosts.join(",")}`);
+        }
+    }
 
     return flags;
 }
 
 /**
- * Builds a DenoPermissionSet from policy and sandbox paths.
- * Replaces the former generateStorageFlags + isSelfTest permission branch.
- * All permissions are derived from the EnclavePolicy (which comes from webrun.json).
+ * Pure translator: ResolvedCapabilities → DenoPermissionSet.
+ * No path resolution, no file-extension checks — just format conversion.
  */
-export function buildPermissionSet(
-    sys: JailRuntime, policy: EnclavePolicy, paths: SandboxPaths,
-    os: string, networkFlags: string[], envPermissions: string[],
-): DenoPermissionSet {
-    const isLinux = os === "linux";
-
-    // Read paths: sandbox infra + policy-declared paths.
-    const unresolvedDir = dirname(paths.webrunEntryPath);
-    const selfPath = tryRealpathSync(sys, paths.webrunEntryPath) || paths.webrunEntryPath;
-    const readPaths = [
-        paths.isolatedTmp, ...policy.allowedReadPaths,
-        paths.runnerTmp, paths.opfsTmp,
-        selfPath, paths.webrunEntryPath, paths.bindingSdksTmp,
-    ];
-
-    // Only grant read access to the surrounding source directory if running
-    // from the raw, unbundled source code (since it needs to dynamically import sibling .ts files).
-    if (paths.webrunEntryPath.endsWith(".ts")) {
-        const selfDir = tryRealpathSync(sys, unresolvedDir) || unresolvedDir;
-        readPaths.push(selfDir, unresolvedDir);
-    }
-
-    // On Linux, Landlock setup needs O_PATH access to system paths before
-    // it applies the irreversible restrictions.
-    if (isLinux) {
-        readPaths.push(...SYSTEM_READ_PATHS.linux, dirname(sys.execPath()));
-    }
-
-    // Write paths: sandbox infra + policy-declared paths.
-    const writePaths = [
-        paths.isolatedTmp, ...policy.allowedWritePaths,
-        paths.opfsTmp, paths.runnerTmp,
-    ];
-
-    // Env: always expose TMP_DIR (infrastructure). Additional vars from policy.
-    let env: string[] | "*";
-    if (envPermissions.length === 1 && envPermissions[0] === "*") {
-        env = "*";
-    } else {
-        env = ["TMP_DIR", ...envPermissions.filter(e => e !== "TMP_DIR")];
-    }
-
+export function toDenoPermissions(caps: ResolvedCapabilities): DenoPermissionSet {
     // Parse network flags to determine denyNet state.
-    const hasDenyNet = networkFlags.includes("--deny-net");
-    const netFlags = networkFlags.filter(f => f !== "--deny-net");
+    const hasDenyNet = caps.networkFlags.includes("--deny-net");
+    const netFlags = caps.networkFlags.filter(f => f !== "--deny-net");
 
     return {
-        read: readPaths,
-        write: writePaths,
+        read: caps.readPaths,
+        write: caps.writePaths,
         net: netFlags,
         denyNet: hasDenyNet,
-        env,
-        run: [],  // Populated by caller when legacyRunBin is set.
-        ffi: isLinux,
+        env: caps.env,
+        run: [],
+        ffi: caps.isLinux,
         sys: ["networkInterfaces"],
-        import: false,
+        import: caps.importHosts.length > 0,
+        importHosts: caps.importHosts.length > 0 && !(caps.importHosts.length === 1 && caps.importHosts[0] === "*")
+            ? caps.importHosts
+            : [],
     };
 }
 
 /**
- * Safely constructs macOS Sandbox (Seatbelt) Enclave subpaths mapping readable and writable
- * strict execution perimeters, translating EnclavePolicy definitions into Seatbelt expressions.
+ * Pure translator: ResolvedCapabilities → Seatbelt enclave subpath strings.
+ * No path resolution, no file-extension checks — just format conversion.
  */
-export function generateSeatbeltEnclaveStrings(sys: JailRuntime, policy: EnclavePolicy, runnerTmp: string, opfsTmp: string, bindingSdksTmp: string, webrunEntryPath: string): { readEnclaves: string, writeEnclaves: string } {
+export function toSeatbeltEnclaves(caps: ResolvedCapabilities): { readEnclaves: string, writeEnclaves: string } {
     let readEnclaves = "";
-    let writeEnclaves = "";
-
-    const selfPath = tryRealpathSync(sys, webrunEntryPath) || webrunEntryPath;
-    readEnclaves += `\n    (subpath "${selfPath}")`;
-
-    // Only grant read access to the surrounding source directory if running
-    // from the raw, unbundled source code (since it needs to dynamically import sibling .ts files).
-    // Bundled executables are self-contained and do not need read access to their directory.
-    if (webrunEntryPath.endsWith(".ts")) {
-        const dirPath = dirname(selfPath);
-        readEnclaves += `\n    (subpath "${dirPath}")`;
-    }
-
-    for (const p of policy.allowedReadPaths) {
+    for (const p of caps.readPaths) {
         readEnclaves += `\n    (subpath "${p}")`;
     }
-    readEnclaves += `\n    (subpath "${runnerTmp}")`;
-    readEnclaves += `\n    (subpath "${bindingSdksTmp}")`;
 
-    for (const p of policy.allowedWritePaths) {
+    let writeEnclaves = "";
+    for (const p of caps.writePaths) {
         writeEnclaves += `\n    (subpath "${p}")`;
     }
-    writeEnclaves += `\n    (subpath "${opfsTmp}")`;
-    writeEnclaves += `\n    (subpath "${runnerTmp}")`;
 
     return { readEnclaves, writeEnclaves };
 }
@@ -356,8 +361,6 @@ export function generateSeatbeltProfile(
     ephemeralPorts: number[],
     allowGpu: boolean,
     hasNetwork: boolean = false,
-    /** @deprecated Legacy bridge: when set, allows process-fork + process-exec for this binary. */
-    legacyRunBin?: string,
 ): string {
     let extraNetworkOutbound = "";
     let extraNetworkInbound = "";
@@ -388,8 +391,7 @@ export function generateSeatbeltProfile(
 (allow signal)
 (allow system-fsctl)
 (deny process-exec)
-${legacyRunBin ? `; @deprecated Legacy bridge: allow process-fork for testsys.Command child spawning.
-(allow process-fork)` : `(deny process-fork)`}
+(deny process-fork)
 ${allowGpu ? `
 (allow iokit-open)
 (allow file-issue-extension)
@@ -398,18 +400,9 @@ ${allowGpu ? `
 (allow file-read* (literal "${cwd}"))
 
 (allow process-exec
-    (literal (param "WEBRUN_EXEC_PATH"))${legacyRunBin ? `
-    ; @deprecated Legacy bridge: allow spawning webrun binary, bash, and POSIX utilities for testsys.Command.
-    (literal "${legacyRunBin}")
-    (subpath "/bin")
-    (subpath "/usr/bin")` : ``}
+    (literal (param "WEBRUN_EXEC_PATH"))
 )
-${legacyRunBin ? `
-; @deprecated Legacy bridge: allow reading the Deno cache so the bash wrapper can locate the Deno binary.
-(allow file-read*
-    (subpath (param "WEBRUN_DENO_DIR"))
-)
-` : ``}
+
 
 (allow file-read*
     (subpath "/usr/lib")
@@ -456,7 +449,7 @@ ${inboundBlock}
     (literal (param "WEBRUN_DENO_JSON"))
     (literal (param "WEBRUN_DENO_JSONC"))
     (literal (param "WEBRUN_DENO_LOCK"))
-    (literal (param "WEBRUN_SCRIPT_PATH"))${legacyRunBin ? `\n    ; @deprecated Legacy bridge: read access for webrun binary and POSIX utilities.\n    (literal "${legacyRunBin}")\n    (subpath "/bin")\n    (subpath "/usr/bin")` : ``}${readEnclaves}
+    (literal (param "WEBRUN_SCRIPT_PATH"))${readEnclaves}
 )
 
 (deny file-read* file-write*
@@ -552,45 +545,33 @@ export function buildNetworkFlags(
 
 /** Input configuration for buildRuntimeArgs. */
 export interface RuntimeArgsInput {
-    sys: JailRuntime;
     invocation: CommandInvocation;
     maxV8MemMB?: number;
     importMapPath: string;
-    ephemeralPorts: number[];
-    policy: EnclavePolicy;
     paths: SandboxPaths;
     payloadPath: string;
-    os: string;
-    envPermissions: string[];
-    /**
-     * @deprecated Legacy bridge: when set, grants --allow-run for this binary.
-     * Remove alongside testCapabilities in Phase E.
-     */
-    legacyRunBin?: string;
+    /** Pre-resolved capabilities — replaces sys, policy, os, ephemeralPorts, envPermissions. */
+    caps: ResolvedCapabilities;
+    /** Absolute path to the CA certificate PEM file (for MITM proxy trust). */
+    caCertPath?: string;
 }
 
 /**
  * Builds the complete Deno CLI argument vector for a sandbox invocation.
  * Pure function — no I/O, no side effects, no isSelfTest branching.
- * Permissions are derived entirely from the EnclavePolicy (which comes from webrun.json).
+ * Permissions are derived entirely from the ResolvedCapabilities.
  */
 export function buildRuntimeArgs(input: RuntimeArgsInput): string[] {
-    const { sys, invocation, maxV8MemMB, importMapPath, ephemeralPorts,
-            policy, paths, payloadPath, os, envPermissions } = input;
+    const { invocation, maxV8MemMB, importMapPath,
+            paths, payloadPath, caps, caCertPath } = input;
     const isCheckOnly = invocation.action === "check-only";
-    const isLinux = os === "linux";
 
     // 1. Subcommand
     const subcommand = buildSubcommand(invocation.action);
 
-    // 2. Network flags (skipped for check-only — no runtime execution)
-    const networkFlags = isCheckOnly
-        ? []
-        : buildNetworkFlags(invocation.networkFlags, invocation.serveInterfaces, ephemeralPorts);
-
     const args = [subcommand];
 
-    // 3. Runtime capability flags
+    // 2. Runtime capability flags
     if (!isCheckOnly) {
         args.push(
             "--unstable-worker-options",
@@ -600,34 +581,28 @@ export function buildRuntimeArgs(input: RuntimeArgsInput): string[] {
         if (maxV8MemMB !== undefined) {
             args.push(`--v8-flags=--max-old-space-size=${maxV8MemMB}`);
         }
-        if (isLinux) args.push("--unstable-ffi");
+        if (caps.isLinux) args.push("--unstable-ffi");
         // Explicitly control Deno's config resolution. Without this, Deno walks
         // up from CWD and may find the wrong config (user's project in bundled
         // mode) or no config at all (temp dir CWD in unbundled mode).
-        if (paths.webrunEntryPath.endsWith(".ts")) {
+        if (paths.isSourceMode) {
             args.push(`--config=${resolve(dirname(paths.webrunEntryPath), "deno.json")}`);
         } else {
             args.push("--no-config");
         }
         args.push("--no-prompt", "--no-npm", "--no-check", "--no-lock");
+        if (caCertPath) {
+            args.push(`--cert=${caCertPath}`);
+        }
     }
 
-    // 4. Permission flags — derived from policy, no special cases.
+    // 3. Permission flags — derived from resolved capabilities.
     if (!isCheckOnly) {
-        const permissions = buildPermissionSet(
-            sys, policy, paths, os, networkFlags, envPermissions,
-        );
-        // @deprecated Legacy bridge: grant unrestricted --allow-run for testsys.Command.
-        // Tests like bundling.test.ts create executables at arbitrary temp paths,
-        // and globals.test.ts spawns Deno directly via t.testsys.execPath().
-        if (input.legacyRunBin) {
-            permissions.run = "*";  // unrestricted
-            permissions.import = true;
-        }
+        const permissions = toDenoPermissions(caps);
         args.push(...serializePermissions(permissions));
     }
 
-    // 5. Entrypoint
+    // 4. Entrypoint
     if (isCheckOnly) {
         args.push(invocation.targetScriptPath);
     } else {

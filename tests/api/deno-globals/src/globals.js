@@ -6,6 +6,7 @@ export default async function(ctx) {
     if (typeof setImmediate !== 'undefined') leaks.push('setImmediate');
     if (typeof clearImmediate !== 'undefined') leaks.push('clearImmediate');
     if (typeof Deno !== 'undefined') leaks.push('Deno');
+    if (typeof RTCPeerConnection !== 'undefined') leaks.push('RTCPeerConnection');
 
     if (leaks.length > 0) {
         console.error("LEAKED_GLOBALS:", leaks.join(', '));

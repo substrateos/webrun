@@ -1,19 +1,20 @@
 // mux_proxy.test.ts — Network integration tests for startMuxProxy.
 //
-// Requires: Deno.serve, Deno.listen, raw fetch.
+// Requires: sys.serve, sys.listen (for test upstreams), raw fetch.
 // Runner: ~/.cache/webrun/deno/deno-*/deno test -A tests/external/mux_proxy.test.ts
 
-import { denoTest } from "./_adapter.ts";
+import { registerTests, sys } from "./_adapter.ts";
+import type { NetAddr } from "../../src/types.ts";
 import { startMuxProxy } from "../../src/mux.ts";
 
-denoTest("MuxProxy", async (t) => {
+export async function testMuxProxy(t: any) {
     function makeMuxSys() {
-        return { listen: Deno.listen.bind(Deno), serve: Deno.serve.bind(Deno) };
+        return { serve: sys.serve.bind(null) };
     }
 
     function getFreePort(): number {
-        const listener = Deno.listen({ port: 0 });
-        const port = (listener.addr as Deno.NetAddr).port;
+        const listener = sys.listen({ port: 0 });
+        const port = (listener.addr as NetAddr).port;
         listener.close();
         return port;
     }
@@ -34,7 +35,7 @@ denoTest("MuxProxy", async (t) => {
     const UPSTREAM_RESPONSE = "mux-test-ok";
 
     const upstreamAc = new AbortController();
-    const upstreamServer = Deno.serve(
+    const upstreamServer = sys.serve(
         { port: UPSTREAM_PORT, hostname: "127.0.0.1", signal: upstreamAc.signal, onListen: () => {} },
         (req: Request) => {
             if (req.headers.has("Authorization")) {
@@ -104,7 +105,7 @@ denoTest("MuxProxy", async (t) => {
             const port2 = getFreePort();
             const token2 = crypto.randomUUID();
             const ac2 = new AbortController();
-            const server2 = Deno.serve(
+            const server2 = sys.serve(
                 { port: port2, hostname: "127.0.0.1", signal: ac2.signal, onListen: () => {} },
                 () => new Response("binding-two"),
             );
@@ -144,7 +145,7 @@ denoTest("MuxProxy", async (t) => {
             const streamAc = new AbortController();
             const streamToken = crypto.randomUUID();
 
-            const streamServer = Deno.serve(
+            const streamServer = sys.serve(
                 { port: streamPort, hostname: "127.0.0.1", signal: streamAc.signal, onListen: () => {} },
                 () => {
                     const encoder = new TextEncoder();
@@ -215,7 +216,7 @@ denoTest("MuxProxy", async (t) => {
             const port0Token = crypto.randomUUID();
             const port0Actual = getFreePort();
             const port0Ac = new AbortController();
-            const _port0Server = Deno.serve(
+            const _port0Server = sys.serve(
                 { port: port0Actual, hostname: "127.0.0.1", signal: port0Ac.signal, onListen: () => {} },
                 () => new Response("port-zero-ok"),
             );
@@ -246,4 +247,7 @@ denoTest("MuxProxy", async (t) => {
         upstreamAc.abort();
         await upstreamServer.finished;
     }
-});
+}
+
+import * as self from "./mux_proxy.test.ts";
+registerTests(self);

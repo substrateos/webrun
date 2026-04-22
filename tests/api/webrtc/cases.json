@@ -1,10 +1,18 @@
 [
   {
     "name": "RTCPeerConnection is exposed globally and establishes Loopback DataChannel seamlessly",
-    "args": ["--module", "p2p.js"],
+    "args": [
+      "--module",
+      "p2p.js"
+    ],
     "expect": {
       "exit_code": 0,
-      "stdout": [{"contains": "WEBRTC_P2P_LOOPBACK_SUCCESS"}]
-    }
+      "stdout": [
+        {
+          "contains": "WEBRTC_P2P_LOOPBACK_SUCCESS"
+        }
+      ]
+    },
+    "runner": "cli"
   }
 ]
