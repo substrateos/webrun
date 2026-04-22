@@ -649,10 +649,12 @@ function createSpawnChild(
                         if (options?.onStderr) options.onStderr(we.data.chunk);
                         if (options?.stderr === "inherit") console.error(we.data.chunk);
                     } else if (we.data.type === "exit") {
+                        worker.terminate();
                         finish(we.data.code);
                     }
                 };
                 worker.onerror = (err: any) => {
+                    worker.terminate();
                     finish(1, "\n" + (err.message || String(err)));
                 };
 

@@ -231,7 +231,7 @@ ${selfCommands}`);
 
 function setupBindingProcesses(sys: HostRuntime, config: WebrunConfig, cwd: string, configDir: string, policy: EnclavePolicy, bindingSdksTmp: string, importMapPath: string, isolatedTmp: string, runnerTmp: string, opfsTmp: string, logsDir: string) {
     const bindingsMap: Record<string, BindingEntry> = {};
-    const activeProcesses: { kill(signal: Signal): void }[] = [];
+    const activeProcesses: { kill(signal: Signal): void; status: Promise<{ code: number }> }[] = [];
     const tokenMap: Record<string, string> = {};
     const muxBindings: { name: string; port: number; token: string }[] = [];
 
@@ -383,11 +383,9 @@ function setupBindingProcesses(sys: HostRuntime, config: WebrunConfig, cwd: stri
         }
     }
 
-    globalThis.addEventListener('unload', () => {
-        for (const p of activeProcesses) {
-            try { p.kill("SIGTERM"); } catch (_) { }
-        }
-    });
+    // Binding process cleanup is handled explicitly in the finally block
+    // of spawnSandboxProcess (SIGTERM + await status) to prevent orphan
+    // accumulation that causes EAGAIN on macOS.
 
     // Start mux proxy for process bindings
     const muxProxy = startMuxProxy(sys, muxBindings);
@@ -654,7 +652,7 @@ export async function spawnSandboxProcess(sys: HostRuntime, cwd: string, args: s
         sys, baseCmd, cmdOptions,
         config.limits?.timeoutMillis, invocation.action === "serve",
         isolatedTmp, runnerTmp, opfsTmp, isOpfsEphemeral, pristineTtyState,
-        muxProxy,
+        muxProxy, activeProcesses,
     );
 }
 
@@ -677,6 +675,7 @@ async function runSandboxLifecycle(
     isOpfsEphemeral: boolean,
     pristineTtyState: string | null,
     muxProxy?: MuxProxy | null,
+    activeProcesses: { kill(signal: Signal): void; status: Promise<{ code: number }> }[] = [],
 ) {
     const cmd = new sys.Command(baseCmd, cmdOptions);
     let exitCode = 1;
@@ -770,6 +769,26 @@ async function runSandboxLifecycle(
         printExecutionError("Failed to spawn", e.message || String(e));
         exitCode = 1;
     } finally {
+        // Kill binding subprocesses and await their termination to prevent
+        // orphan accumulation that causes EAGAIN (os error 35) on macOS.
+        for (const p of activeProcesses) {
+            try { p.kill("SIGTERM"); } catch (_) { }
+        }
+        // Race each status against a 2s deadline — don't block exit forever.
+        const results = await Promise.allSettled(
+            activeProcesses.map(p =>
+                Promise.race([
+                    p.status.then(() => "exited" as const),
+                    new Promise<"timeout">(r => setTimeout(() => r("timeout"), 2000))
+                ])
+            )
+        );
+        for (let i = 0; i < results.length; i++) {
+            const r = results[i];
+            if (r.status === "fulfilled" && r.value !== "exited") {
+                try { activeProcesses[i].kill("SIGKILL"); } catch (_) { }
+            }
+        }
         if (muxProxy) await muxProxy.shutdown().catch(() => {});
         tryRemoveSync(sys, isolatedTmp, { recursive: true });
         tryRemoveSync(sys, runnerTmp, { recursive: true });
