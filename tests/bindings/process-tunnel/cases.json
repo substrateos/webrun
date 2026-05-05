@@ -2,7 +2,7 @@
   {
     "name": "Lifecycle & Port Tunneling: Natively routes fetch to Deno sub-socket allocating dynamic port variable",
     "args": [
-      "--module",
+      
       "test.js"
     ],
     "expect": {

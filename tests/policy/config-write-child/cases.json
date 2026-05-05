@@ -1,7 +1,7 @@
 [
   {
     "name": "Aborts if policy allows writing to a child webrun.json directory",
-    "args": ["--module", "test.js"],
+    "args": ["test.js"],
     "cwd": "child",
     "expect": {
       "exit_code": 1,

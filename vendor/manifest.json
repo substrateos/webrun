@@ -1,0 +1,380 @@
+{
+  "folders": {
+    "https://deno.land/x/deno_cache@0.6.2/lib/snippets/deno_cache_dir-a2aecaa9536c9402/": "deno.land/x/deno_cache@0.6.2/lib/snippets/#deno_cache_dir-a2aec_8ef02",
+    "https://esm.sh/minimalistic-crypto-utils@1.0.1/": "esm.sh/#minimalistic-crypto-_a2222",
+    "https://esm.sh/v135/minimalistic-crypto-utils@1.0.1/": "esm.sh/v135/#minimalistic-crypto-_a2222"
+  },
+  "modules": {
+    "https://esm.sh/@fidm/asn1@1.0.4?target=denonext": {
+      "headers": {
+        "content-type": "application/javascript; charset=utf-8",
+        "x-typescript-types": "https://esm.sh/@fidm/asn1@1.0.4/build/index.d.ts"
+      }
+    },
+    "https://esm.sh/@fidm/asn1@^1.0.4?target=denonext": {
+      "headers": {
+        "location": "https://esm.sh/@fidm/asn1@1.0.4?target=denonext"
+      }
+    },
+    "https://esm.sh/@fidm/x509@1.2.1/build/common?target=denonext": {
+      "headers": {
+        "content-type": "application/javascript; charset=utf-8",
+        "x-typescript-types": "https://esm.sh/@fidm/x509@1.2.1/build/common.d.ts"
+      }
+    },
+    "https://esm.sh/@fidm/x509@1.2.1/build/pki?target=denonext": {
+      "headers": {
+        "content-type": "application/javascript; charset=utf-8",
+        "x-typescript-types": "https://esm.sh/@fidm/x509@1.2.1/build/pki.d.ts"
+      }
+    },
+    "https://esm.sh/@fidm/x509@1.2.1/build/x509?target=denonext": {
+      "headers": {
+        "content-type": "application/javascript; charset=utf-8",
+        "x-typescript-types": "https://esm.sh/@fidm/x509@1.2.1/build/x509.d.ts"
+      }
+    },
+    "https://esm.sh/@fidm/x509@^1.2.1/build/common?target=denonext": {
+      "headers": {
+        "location": "https://esm.sh/@fidm/x509@1.2.1/build/common?target=denonext"
+      }
+    },
+    "https://esm.sh/@fidm/x509@^1.2.1/build/pki?target=denonext": {
+      "headers": {
+        "location": "https://esm.sh/@fidm/x509@1.2.1/build/pki?target=denonext"
+      }
+    },
+    "https://esm.sh/@fidm/x509@^1.2.1/build/x509?target=denonext": {
+      "headers": {
+        "location": "https://esm.sh/@fidm/x509@1.2.1/build/x509?target=denonext"
+      }
+    },
+    "https://esm.sh/bn.js@4.12.3?target=denonext": {
+      "headers": {
+        "content-type": "application/javascript; charset=utf-8",
+        "x-typescript-types": "https://esm.sh/@types/bn.js@~4.11.6/index.d.ts"
+      }
+    },
+    "https://esm.sh/bn.js@^4.11.9?target=denonext": {
+      "headers": {
+        "location": "https://esm.sh/bn.js@4.12.3?target=denonext"
+      }
+    },
+    "https://esm.sh/brorand@1.1.0?target=denonext": {
+      "headers": {
+        "content-type": "application/javascript; charset=utf-8",
+        "x-typescript-types": "https://esm.sh/@types/brorand@~1.0.33/index.d.ts"
+      }
+    },
+    "https://esm.sh/brorand@^1.1.0?target=denonext": {
+      "headers": {
+        "location": "https://esm.sh/brorand@1.1.0?target=denonext"
+      }
+    },
+    "https://esm.sh/elliptic@6.6.1/lib/elliptic/curve?target=denonext": {
+      "headers": {
+        "content-type": "application/javascript; charset=utf-8"
+      }
+    },
+    "https://esm.sh/elliptic@6.6.1/lib/elliptic/curves?target=denonext": {
+      "headers": {
+        "content-type": "application/javascript; charset=utf-8"
+      }
+    },
+    "https://esm.sh/elliptic@6.6.1/lib/elliptic/ec?target=denonext": {
+      "headers": {
+        "content-type": "application/javascript; charset=utf-8"
+      }
+    },
+    "https://esm.sh/elliptic@6.6.1/lib/elliptic/eddsa?target=denonext": {
+      "headers": {
+        "content-type": "application/javascript; charset=utf-8"
+      }
+    },
+    "https://esm.sh/elliptic@6.6.1/lib/elliptic/utils?target=denonext": {
+      "headers": {
+        "content-type": "application/javascript; charset=utf-8"
+      }
+    },
+    "https://esm.sh/elliptic@6.6.1/package.json?module": {
+      "headers": {
+        "content-type": "application/javascript; charset=utf-8"
+      }
+    },
+    "https://esm.sh/elliptic@^6.5.3/lib/elliptic/curve?target=denonext": {
+      "headers": {
+        "location": "https://esm.sh/elliptic@6.6.1/lib/elliptic/curve?target=denonext"
+      }
+    },
+    "https://esm.sh/elliptic@^6.5.3/lib/elliptic/curves?target=denonext": {
+      "headers": {
+        "location": "https://esm.sh/elliptic@6.6.1/lib/elliptic/curves?target=denonext"
+      }
+    },
+    "https://esm.sh/elliptic@^6.5.3/lib/elliptic/ec?target=denonext": {
+      "headers": {
+        "location": "https://esm.sh/elliptic@6.6.1/lib/elliptic/ec?target=denonext"
+      }
+    },
+    "https://esm.sh/elliptic@^6.5.3/lib/elliptic/eddsa?target=denonext": {
+      "headers": {
+        "location": "https://esm.sh/elliptic@6.6.1/lib/elliptic/eddsa?target=denonext"
+      }
+    },
+    "https://esm.sh/elliptic@^6.5.3/lib/elliptic/utils?target=denonext": {
+      "headers": {
+        "location": "https://esm.sh/elliptic@6.6.1/lib/elliptic/utils?target=denonext"
+      }
+    },
+    "https://esm.sh/elliptic@^6.5.3/package.json?module": {
+      "headers": {
+        "location": "https://esm.sh/elliptic@6.6.1/package.json?module"
+      }
+    },
+    "https://esm.sh/hash.js@1.1.7?target=denonext": {
+      "headers": {
+        "content-type": "application/javascript; charset=utf-8",
+        "x-typescript-types": "https://esm.sh/hash.js@1.1.7/lib/hash.d.ts"
+      }
+    },
+    "https://esm.sh/hash.js@^1.0.0?target=denonext": {
+      "headers": {
+        "location": "https://esm.sh/hash.js@1.1.7?target=denonext"
+      }
+    },
+    "https://esm.sh/hash.js@^1.0.3?target=denonext": {
+      "headers": {
+        "location": "https://esm.sh/hash.js@1.1.7?target=denonext"
+      }
+    },
+    "https://esm.sh/hmac-drbg@1.0.1?target=denonext": {
+      "headers": {
+        "content-type": "application/javascript; charset=utf-8"
+      }
+    },
+    "https://esm.sh/hmac-drbg@^1.0.1?target=denonext": {
+      "headers": {
+        "location": "https://esm.sh/hmac-drbg@1.0.1?target=denonext"
+      }
+    },
+    "https://esm.sh/minimalistic-assert@1.0.1?target=denonext": {
+      "headers": {
+        "content-type": "application/javascript; charset=utf-8",
+        "x-typescript-types": "https://esm.sh/@types/minimalistic-assert@~1.0.3/index.d.ts"
+      }
+    },
+    "https://esm.sh/minimalistic-assert@^1.0.0?target=denonext": {
+      "headers": {
+        "location": "https://esm.sh/minimalistic-assert@1.0.1?target=denonext"
+      }
+    },
+    "https://esm.sh/minimalistic-assert@^1.0.1?target=denonext": {
+      "headers": {
+        "location": "https://esm.sh/minimalistic-assert@1.0.1?target=denonext"
+      }
+    },
+    "https://esm.sh/minimalistic-crypto-utils@1.0.1?target=denonext": {
+      "headers": {
+        "content-type": "application/javascript; charset=utf-8"
+      }
+    },
+    "https://esm.sh/minimalistic-crypto-utils@^1.0.1?target=denonext": {
+      "headers": {
+        "location": "https://esm.sh/minimalistic-crypto-utils@1.0.1?target=denonext"
+      }
+    },
+    "https://esm.sh/rx.mini@0.1.1/lib/core?target=denonext": {
+      "headers": {
+        "content-type": "application/javascript; charset=utf-8",
+        "x-typescript-types": "https://esm.sh/rx.mini@0.1.1/lib/core/index.d.ts"
+      }
+    },
+    "https://esm.sh/rx.mini@0.1.1/lib/extensions/buffer?target=denonext": {
+      "headers": {
+        "content-type": "application/javascript; charset=utf-8",
+        "x-typescript-types": "https://esm.sh/rx.mini@0.1.1/lib/extensions/buffer/index.d.ts"
+      }
+    },
+    "https://esm.sh/rx.mini@0.1.1/lib/extensions/pack?target=denonext": {
+      "headers": {
+        "content-type": "application/javascript; charset=utf-8",
+        "x-typescript-types": "https://esm.sh/rx.mini@0.1.1/lib/extensions/pack/index.d.ts"
+      }
+    },
+    "https://esm.sh/rx.mini@0.1.1/lib/extensions/wait?target=denonext": {
+      "headers": {
+        "content-type": "application/javascript; charset=utf-8",
+        "x-typescript-types": "https://esm.sh/rx.mini@0.1.1/lib/extensions/wait/index.d.ts"
+      }
+    },
+    "https://esm.sh/rx.mini@^0.1.1/lib/core?target=denonext": {
+      "headers": {
+        "location": "https://esm.sh/rx.mini@0.1.1/lib/core?target=denonext"
+      }
+    },
+    "https://esm.sh/rx.mini@^0.1.1/lib/extensions/buffer?target=denonext": {
+      "headers": {
+        "location": "https://esm.sh/rx.mini@0.1.1/lib/extensions/buffer?target=denonext"
+      }
+    },
+    "https://esm.sh/rx.mini@^0.1.1/lib/extensions/pack?target=denonext": {
+      "headers": {
+        "location": "https://esm.sh/rx.mini@0.1.1/lib/extensions/pack?target=denonext"
+      }
+    },
+    "https://esm.sh/rx.mini@^0.1.1/lib/extensions/wait?target=denonext": {
+      "headers": {
+        "location": "https://esm.sh/rx.mini@0.1.1/lib/extensions/wait?target=denonext"
+      }
+    },
+    "https://esm.sh/tslib?target=denonext": {
+      "headers": {
+        "location": "https://esm.sh/tslib@2.8.1?target=denonext"
+      }
+    },
+    "https://esm.sh/tslib@2.8.1?target=denonext": {
+      "headers": {
+        "content-type": "application/javascript; charset=utf-8",
+        "x-typescript-types": "https://esm.sh/tslib@2.8.1/modules/index.d.ts"
+      }
+    },
+    "https://esm.sh/turbo-crc32@1.0.1/src/crc32-by-8?target=denonext": {
+      "headers": {
+        "content-type": "application/javascript; charset=utf-8"
+      }
+    },
+    "https://esm.sh/turbo-crc32@1.0.1/src/create-table?target=denonext": {
+      "headers": {
+        "content-type": "application/javascript; charset=utf-8"
+      }
+    },
+    "https://esm.sh/turbo-crc32@^1.0.1/src/crc32-by-8?target=denonext": {
+      "headers": {
+        "location": "https://esm.sh/turbo-crc32@1.0.1/src/crc32-by-8?target=denonext"
+      }
+    },
+    "https://esm.sh/turbo-crc32@^1.0.1/src/create-table?target=denonext": {
+      "headers": {
+        "location": "https://esm.sh/turbo-crc32@1.0.1/src/create-table?target=denonext"
+      }
+    },
+    "https://esm.sh/tweetnacl@1.0.3?target=denonext": {
+      "headers": {
+        "content-type": "application/javascript; charset=utf-8",
+        "x-typescript-types": "https://esm.sh/tweetnacl@1.0.3/nacl.d.ts"
+      }
+    },
+    "https://esm.sh/tweetnacl@^1.0.1?target=denonext": {
+      "headers": {
+        "location": "https://esm.sh/tweetnacl@1.0.3?target=denonext"
+      }
+    },
+    "https://esm.sh/uuid@8.3.2/dist/esm-browser/nil?target=denonext": {
+      "headers": {
+        "content-type": "application/javascript; charset=utf-8"
+      }
+    },
+    "https://esm.sh/uuid@8.3.2/dist/esm-browser/parse?target=denonext": {
+      "headers": {
+        "content-type": "application/javascript; charset=utf-8"
+      }
+    },
+    "https://esm.sh/uuid@8.3.2/dist/esm-browser/stringify?target=denonext": {
+      "headers": {
+        "content-type": "application/javascript; charset=utf-8"
+      }
+    },
+    "https://esm.sh/uuid@8.3.2/dist/esm-browser/v1?target=denonext": {
+      "headers": {
+        "content-type": "application/javascript; charset=utf-8"
+      }
+    },
+    "https://esm.sh/uuid@8.3.2/dist/esm-browser/v3?target=denonext": {
+      "headers": {
+        "content-type": "application/javascript; charset=utf-8"
+      }
+    },
+    "https://esm.sh/uuid@8.3.2/dist/esm-browser/v4?target=denonext": {
+      "headers": {
+        "content-type": "application/javascript; charset=utf-8"
+      }
+    },
+    "https://esm.sh/uuid@8.3.2/dist/esm-browser/v5?target=denonext": {
+      "headers": {
+        "content-type": "application/javascript; charset=utf-8"
+      }
+    },
+    "https://esm.sh/uuid@8.3.2/dist/esm-browser/validate?target=denonext": {
+      "headers": {
+        "content-type": "application/javascript; charset=utf-8"
+      }
+    },
+    "https://esm.sh/uuid@8.3.2/dist/esm-browser/version?target=denonext": {
+      "headers": {
+        "content-type": "application/javascript; charset=utf-8"
+      }
+    },
+    "https://esm.sh/uuid@^8.2.0/dist/esm-browser/nil?target=denonext": {
+      "headers": {
+        "location": "https://esm.sh/uuid@8.3.2/dist/esm-browser/nil?target=denonext"
+      }
+    },
+    "https://esm.sh/uuid@^8.2.0/dist/esm-browser/parse?target=denonext": {
+      "headers": {
+        "location": "https://esm.sh/uuid@8.3.2/dist/esm-browser/parse?target=denonext"
+      }
+    },
+    "https://esm.sh/uuid@^8.2.0/dist/esm-browser/stringify?target=denonext": {
+      "headers": {
+        "location": "https://esm.sh/uuid@8.3.2/dist/esm-browser/stringify?target=denonext"
+      }
+    },
+    "https://esm.sh/uuid@^8.2.0/dist/esm-browser/v1?target=denonext": {
+      "headers": {
+        "location": "https://esm.sh/uuid@8.3.2/dist/esm-browser/v1?target=denonext"
+      }
+    },
+    "https://esm.sh/uuid@^8.2.0/dist/esm-browser/v3?target=denonext": {
+      "headers": {
+        "location": "https://esm.sh/uuid@8.3.2/dist/esm-browser/v3?target=denonext"
+      }
+    },
+    "https://esm.sh/uuid@^8.2.0/dist/esm-browser/v4?target=denonext": {
+      "headers": {
+        "location": "https://esm.sh/uuid@8.3.2/dist/esm-browser/v4?target=denonext"
+      }
+    },
+    "https://esm.sh/uuid@^8.2.0/dist/esm-browser/v5?target=denonext": {
+      "headers": {
+        "location": "https://esm.sh/uuid@8.3.2/dist/esm-browser/v5?target=denonext"
+      }
+    },
+    "https://esm.sh/uuid@^8.2.0/dist/esm-browser/validate?target=denonext": {
+      "headers": {
+        "location": "https://esm.sh/uuid@8.3.2/dist/esm-browser/validate?target=denonext"
+      }
+    },
+    "https://esm.sh/uuid@^8.2.0/dist/esm-browser/version?target=denonext": {
+      "headers": {
+        "location": "https://esm.sh/uuid@8.3.2/dist/esm-browser/version?target=denonext"
+      }
+    },
+    "https://esm.sh/v135/werift-webrtc": {
+      "headers": {
+        "location": "https://esm.sh/v135/werift-webrtc@0.0.6"
+      }
+    },
+    "https://esm.sh/v135/werift-webrtc@0.0.6": {
+      "headers": {
+        "content-type": "application/javascript; charset=utf-8",
+        "x-typescript-types": "https://esm.sh/v135/werift-webrtc@0.0.6/lib/index.d.ts"
+      }
+    },
+    "https://esm.sh/werift-webrtc@0.0.6?bundle": {
+      "headers": {
+        "content-type": "application/javascript; charset=utf-8",
+        "x-typescript-types": "https://esm.sh/werift-webrtc@0.0.6/lib/index.d.ts"
+      }
+    }
+  }
+}

@@ -2,7 +2,7 @@
   {
     "name": "Module Fetch Routing: Proxies raw Web API fetch to module Service Worker via postMessage IPC",
     "args": [
-      "--module",
+      
       "test.js"
     ],
     "expect": {

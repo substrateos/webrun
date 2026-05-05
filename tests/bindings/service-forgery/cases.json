@@ -2,7 +2,7 @@
   {
     "name": "UUID Forgery & Null Routing: Explicitly rejects standard fetch calls aiming directly at native ports or unlisted UUIDs",
     "args": [
-      "--module",
+      
       "test.js"
     ],
     "expect": {

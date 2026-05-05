@@ -1,7 +1,7 @@
 [
   {
     "name": "Node Sinkhole Preservation",
-    "args": ["--module", "src/test.js"],
+    "args": ["src/test.js"],
     "expect": {
       "exit_code": 1,
       "stderr": [{"contains": "Node/NPM modules are blocked"}]

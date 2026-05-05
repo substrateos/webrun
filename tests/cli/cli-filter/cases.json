@@ -1,8 +1,8 @@
 [
   { "name": "--test=filter dynamically routes test execution and skips mismatching suites automatically",
-    "args": ["--test=sub_test_only", "--module", "suite.ts"],
+    "args": ["--test=sub_test_only", "suite.ts"],
     "expect": { "exit_code": 0, "stdout": [{"contains": "MATCHING_SUB_EXECUTED"}] } },
   { "name": "--test=filter skips all sub-tests when none match",
-    "args": ["--test=nonexistent_pattern", "--module", "suite.ts"],
+    "args": ["--test=nonexistent_pattern", "suite.ts"],
     "expect": { "exit_code": 0, "stdout": [{"absent": "MATCHING_SUB_EXECUTED"}, {"absent": "SHOULD_NOT_EXECUTE"}] } }
 ]

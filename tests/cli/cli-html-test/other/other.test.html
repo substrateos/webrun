@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html>
+<head>
+</head>
+<body>
+    <script type="module">
+import { otherGreeting } from "./other_greeting.ts";
+
+export function testOtherGreeting() {
+    if (otherGreeting() !== "Hello from other") {
+        throw new Error("Expected 'Hello from other', got: " + otherGreeting());
+    }
+}
+
+export function testOtherHtmlContext(t, ctx) {
+    if (!ctx.location.endsWith("other.test.html")) {
+        throw new Error("Expected ctx.location to end with other.test.html, got: " + ctx.location);
+    }
+    if (typeof ctx.srcdoc !== "string") {
+        throw new Error("Expected ctx.srcdoc to be a string, got: " + typeof ctx.srcdoc);
+    }
+}
+    </script>
+</body>
+</html>

@@ -2,7 +2,7 @@
   {
     "name": "Blocks SSRF to localhost even if network is open",
     "args": [
-      "--module",
+      
       "src/test.js"
     ],
     "expect": {

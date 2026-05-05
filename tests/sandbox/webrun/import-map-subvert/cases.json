@@ -1,7 +1,7 @@
 [
   {
     "name": "Proves importing from import map does not subvert user storage permissions",
-    "args": ["--module", "test.js"],
+    "args": ["test.js"],
     "cwd": "src",
     "expect": {
       "exit_code": 1,

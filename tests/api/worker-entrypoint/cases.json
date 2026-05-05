@@ -1,7 +1,7 @@
 [
   {
     "name": "Main Entrypoint WorkerGlobalScope Execution",
-    "args": ["--module", "main.js"],
+    "args": ["main.js"],
     "expect": {
       "exit_code": 0,
       "stdout": [{"contains": "ENTRYPOINT_IS_WORKER"}]

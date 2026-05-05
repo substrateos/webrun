@@ -2,7 +2,7 @@
   {
     "name": "Graceful Teardown & Zombie Prevention: Process terminates definitively natively when sandbox completes",
     "args": [
-      "--module",
+      
       "test.js"
     ],
     "expect": {

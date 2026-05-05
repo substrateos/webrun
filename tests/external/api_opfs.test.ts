@@ -37,11 +37,11 @@ export default async function() {
     }
 }`);
         
-        const wcmd = new sys.Command(WEBRUN_BIN, { args: ["--module", "write.js"], cwd: tmpApi, stdout: "null", stderr: "inherit" });
+        const wcmd = new sys.Command(WEBRUN_BIN, { args: ["write.js"], cwd: tmpApi, stdout: "null", stderr: "inherit" });
         const wout = await wcmd.output();
         if (wout.code !== 0) throw new Error("Write failed");
 
-        const rcmd = new sys.Command(WEBRUN_BIN, { args: ["--module", "read.js"], cwd: tmpApi, stdout: "null", stderr: "inherit" });
+        const rcmd = new sys.Command(WEBRUN_BIN, { args: ["read.js"], cwd: tmpApi, stdout: "null", stderr: "inherit" });
         const rout = await rcmd.output();
         if (rout.code !== 0) throw new Error("Read failed - OPFS did not persist");
 
@@ -92,7 +92,7 @@ export default async function() {
     console.log("MULTI_OK");
 }`);
 
-        const cmd = new sys.Command(WEBRUN_BIN, { args: ["--module", "multi.js"], cwd: tmpApi, stdout: "piped", stderr: "piped" });
+        const cmd = new sys.Command(WEBRUN_BIN, { args: ["multi.js"], cwd: tmpApi, stdout: "piped", stderr: "piped" });
         const out = await cmd.output();
         const stdout = new TextDecoder().decode(out.stdout);
         if (out.code !== 0 || !stdout.includes("MULTI_OK")) {
@@ -124,11 +124,11 @@ export default async function() {
     }
 }`);
 
-        const wcmd = new sys.Command(WEBRUN_BIN, { args: ["--module", "write.js"], cwd: tmpApi, stdout: "null", stderr: "inherit" });
+        const wcmd = new sys.Command(WEBRUN_BIN, { args: ["write.js"], cwd: tmpApi, stdout: "null", stderr: "inherit" });
         const wout = await wcmd.output();
         if (wout.code !== 0) throw new Error("Ephemeral write failed");
 
-        const rcmd = new sys.Command(WEBRUN_BIN, { args: ["--module", "read.js"], cwd: tmpApi, stdout: "null", stderr: "piped" });
+        const rcmd = new sys.Command(WEBRUN_BIN, { args: ["read.js"], cwd: tmpApi, stdout: "null", stderr: "piped" });
         const rout = await rcmd.output();
         if (rout.code !== 0) {
             const stderr = new TextDecoder().decode(rout.stderr);
@@ -154,7 +154,7 @@ export default async function() {
         }
     }
 }`);
-        const cmd = new sys.Command(WEBRUN_BIN, { args: ["--module", "ws_error.js"], cwd: tmpApi, stdout: "piped", stderr: "piped" });
+        const cmd = new sys.Command(WEBRUN_BIN, { args: ["ws_error.js"], cwd: tmpApi, stdout: "piped", stderr: "piped" });
         const out = await cmd.output();
         const stdout = new TextDecoder().decode(out.stdout);
         if (out.code !== 0 || !stdout.includes("GATE_OK")) {

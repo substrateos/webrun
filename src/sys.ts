@@ -38,3 +38,47 @@ export function resolveWebrunEntryPath(sys: { realPathSync(p: string): string },
     const url = new URL(callerUrl.endsWith(".ts") ? new URL("../webrun.ts", import.meta.url).href : callerUrl);
     return url.protocol === "file:" ? (tryRealpathSync(sys, url.pathname) || url.pathname) : url.href;
 }
+
+/**
+ * Resolves the XDG-compliant webrun cache root directory.
+ * Matches the bash wrapper: ${XDG_CACHE_HOME:-$HOME/.cache}/webrun
+ *
+ * Layout:
+ *   <root>/deno/      — the managed Deno binary
+ *   <root>/modules/   — Deno module cache (keyed by UA hash)
+ */
+export function resolveWebrunCacheRoot(
+    env: { get(key: string): string | undefined },
+): string {
+    const { resolve } = await_free_resolve();
+    const xdgCache = env.get("XDG_CACHE_HOME")
+        || resolve(env.get("HOME") || "/tmp", ".cache");
+    return resolve(xdgCache, "webrun");
+}
+
+
+// Inline path.resolve without async import — avoids top-level await.
+function await_free_resolve(): { resolve(...paths: string[]): string } {
+    // Use the same resolve already imported by consumers. This module
+    // can't import it directly without creating a circular dep, so we
+    // implement a minimal join+normalize inline.
+    return {
+        resolve(...paths: string[]): string {
+            let resolved = "";
+            for (let i = paths.length - 1; i >= 0; i--) {
+                const p = paths[i];
+                if (!p) continue;
+                resolved = resolved ? p + "/" + resolved : p;
+                if (p.startsWith("/")) break;
+            }
+            // Normalize //  and trailing /
+            const parts = resolved.split("/").filter(Boolean);
+            const stack: string[] = [];
+            for (const part of parts) {
+                if (part === "..") { stack.pop(); }
+                else if (part !== ".") { stack.push(part); }
+            }
+            return (resolved.startsWith("/") ? "/" : "") + stack.join("/");
+        },
+    };
+}

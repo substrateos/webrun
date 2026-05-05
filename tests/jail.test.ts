@@ -1,5 +1,5 @@
 import { dirname } from "https://deno.land/std@0.224.0/path/mod.ts";
-import { buildJailConfig, buildSubcommand, buildNetworkFlags, generateSeatbeltProfile, SYSTEM_READ_PATHS, resolveCapabilities, toLandlockPolicy } from "../src/jail.ts";
+import { buildJailConfig, buildSubcommand, buildNetworkFlags, generateSeatbeltProfile, SYSTEM_READ_PATHS, resolveCapabilities, toLandlockPolicy, toDenoPermissions, serializePermissions } from "../src/jail.ts";
 import { computeOpfsPathId } from "../src/host/opfs.ts";
 import { evaluateEnclavePolicy } from "../src/policy.ts";
 
@@ -121,9 +121,11 @@ export async function testJailDispatch(t: any) {
             expect: (p: any) => p.write_paths.includes("/home/user/project/data"),
         },
         {
-            name: "exec_paths contains only the runtime binary",
+            name: "exec_paths contains runtime binary and system libraries",
             policy: mockPolicy(),
-            expect: (p: any) => p.exec_paths.length === 1 && p.exec_paths[0] === "/usr/bin/deno",
+            expect: (p: any) => p.exec_paths.includes("/usr/bin/deno") &&
+                p.exec_paths.includes("/usr/lib") &&
+                p.exec_paths.includes("/lib"),
         },
         {
             name: "system library paths always present",
@@ -535,4 +537,46 @@ export async function testSeatbeltNetworkPolicy(t: any) {
             tc.expect(profile);
         });
     }
+}
+
+export async function testImportPermissions(t: any) {
+    await t.run("importHosts flows through to --allow-import flag", async () => {
+        const sys = mockSys();
+        const policy = mockPolicy();
+        const caps = resolveCapabilities(
+            sys, policy, DEFAULT_PATHS, [], false, "darwin", [], [],
+            ["esm.sh:443", "unpkg.com:443"],
+        );
+        const permissions = toDenoPermissions(caps);
+        const flags = serializePermissions(permissions);
+        const importFlag = flags.find(f => f.startsWith("--allow-import="));
+        if (!importFlag) {
+            throw new Error("Expected --allow-import flag, got flags: " + JSON.stringify(flags));
+        }
+        if (!importFlag.includes("esm.sh:443")) {
+            throw new Error("Expected esm.sh:443 in --allow-import, got: " + importFlag);
+        }
+        if (!importFlag.includes("unpkg.com:443")) {
+            throw new Error("Expected unpkg.com:443 in --allow-import, got: " + importFlag);
+        }
+    });
+
+    await t.run("config.permissions.import (singular) is read correctly", async () => {
+        // Simulate what mod.ts does: config.permissions?.import || []
+        const config = {
+            permissions: {
+                import: ["esm.sh:443", "deno.land:443"],
+            },
+        };
+        const importHosts = [
+            "127.0.0.1", "deno.land", "jsr.io",
+            ...(config.permissions?.import || []),
+        ];
+        if (!importHosts.includes("esm.sh:443")) {
+            throw new Error("Expected esm.sh:443 in importHosts, got: " + JSON.stringify(importHosts));
+        }
+        if (!importHosts.includes("deno.land:443")) {
+            throw new Error("Expected deno.land:443 in importHosts, got: " + JSON.stringify(importHosts));
+        }
+    });
 }

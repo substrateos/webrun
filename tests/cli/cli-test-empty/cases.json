@@ -1,3 +1,3 @@
 [{ "name": "Exits cleanly when no test exports found",
-   "args": ["--test", "--module", "empty.ts"],
+   "args": ["--test", "empty.ts"],
    "expect": { "exit_code": 0, "stderr": [{"contains": "No test exports found"}] } }]

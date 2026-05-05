@@ -24,7 +24,7 @@ test: check-webrtc
 # Run the external test suite (tests requiring raw Deno: TTY, git, raw network, bundling).
 # These run outside the webrun sandbox using the project's pinned Deno binary.
 test-external: $(DENO_BIN)
-	$(DENO_BIN) test -A tests/external/
+	$(DENO_BIN) test --no-lock -A tests/external/
 
 # Regenerate src/internal/webrtc/bundle.js and verify it matches what's committed.
 check-webrtc: src/internal/webrtc/node_modules $(DENO_BIN)

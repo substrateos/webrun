@@ -13,7 +13,7 @@ export class SecurityViolationError extends Error {
     }
 }
 import { printWarning, printSecurityFatal } from "./log.ts";
-import { WebrunConfig, PolicyRuntime } from "./types.ts";
+import { WebrunConfig, PolicyRuntime, CapabilityRequest } from "./types.ts";
 import { generateBaseImportMap, rewriteImportMapPathsToAbsolute, mergeImportMaps } from "./config.ts";
 
 // =========================================================
@@ -34,7 +34,7 @@ export interface EnclavePolicy {
  * Calculates read/write capabilities derived strictly from the explicit webrun.json storage manifest
  * without implicitly expanding permissions (e.g. implicitly loading module paths is not natively whitelisted).
  */
-export function evaluateEnclavePolicy(sys: PolicyRuntime, configDirs: Record<string, { access: "read" | "write" }>, configBindings: string[], configDir: string, currentDir: string, isolatedTmp: string): EnclavePolicy {
+export function evaluateEnclavePolicy(sys: PolicyRuntime, configDirs: Record<string, import("./types.ts").WebrunStorageAccess>, configBindings: string[], configDir: string, currentDir: string, isolatedTmp: string): EnclavePolicy {
     let isPwdAllowed = false;
     const fallbackToTemp = Object.keys(configDirs).length === 0;
 
@@ -71,6 +71,10 @@ export function evaluateEnclavePolicy(sys: PolicyRuntime, configDirs: Record<str
         
         if (currentDir === absFsPath || currentDir.startsWith(absFsPath + "/")) {
             isPwdAllowed = true;
+        }
+
+        if (settings.access === "delegate" || settings.access === "none") {
+            continue;
         }
 
         allowedReadPaths.push(absFsPath);
@@ -162,216 +166,217 @@ export function findLocalConfigurations(sys: PolicyRuntime, currentDir: string):
     return allConfigs;
 }
 
-export function validatePrivilegeNarrowing(sys: PolicyRuntime, parentConfig: WebrunConfig, parentDir: string, childConfig: WebrunConfig, childDir: string) {
-    if (parentConfig.limits) {
-        if (parentConfig.limits.timeoutMillis !== undefined && childConfig.limits?.timeoutMillis !== undefined && childConfig.limits.timeoutMillis > parentConfig.limits.timeoutMillis) {
-            printSecurityFatal("Privilege escalation detected in nested configuration.", {
-                Reason: "Escalating 'timeoutMillis' limit",
-                Attempted: String(childConfig.limits.timeoutMillis),
-                Permitted: String(parentConfig.limits.timeoutMillis),
-                Child: childDir,
-                Parent: parentDir
-            });
-            throw new SecurityViolationError("Escalating timeoutMillis");
-        }
-        if (parentConfig.limits.memoryMB !== undefined && childConfig.limits?.memoryMB !== undefined && childConfig.limits.memoryMB > parentConfig.limits.memoryMB) {
-            printSecurityFatal("Privilege escalation detected in nested configuration.", {
-                Reason: "Escalating 'memoryMB' limit",
-                Attempted: String(childConfig.limits.memoryMB),
-                Permitted: String(parentConfig.limits.memoryMB),
-                Child: childDir,
-                Parent: parentDir
-            });
-            throw new SecurityViolationError("Escalating memoryMB");
-        }
+export function resolveLocalConfiguration(sys: PolicyRuntime, currentDir: string): { config: WebrunConfig, configDir: string, configFound: boolean, configPaths: string[], importMapPaths: string[] } {
+    const allConfigs = findLocalConfigurations(sys, currentDir);
+    if (allConfigs.length === 0) {
+        return { config: { permissions: { storage: {}, network: [], env: [], bindings: [] } }, configDir: currentDir, configFound: false, configPaths: [], importMapPaths: [] };
     }
 
-    for (const e of childConfig.permissions!.env!) {
-        if (!parentConfig.permissions!.env!.includes(e)) {
-            printSecurityFatal("Privilege escalation detected in nested configuration.", {
-                Reason: "Escalating 'env' permissions",
-                Attempted: e,
-                Child: childDir,
-                Parent: parentDir
-            });
-            throw new SecurityViolationError(`Escalating env: ${e}`);
-        }
-    }
+    // OCap Chain Evaluation
+    // 1. Target config (most specific) builds the initial CapabilityRequest
+    const targetConfig = allConfigs[0];
+    const initialConfigDir = targetConfig.dir;
 
-    for (const n of childConfig.permissions!.network!) {
-        if (!parentConfig.permissions!.network!.includes(n)) {
-            printSecurityFatal("Privilege escalation detected in nested configuration.", {
-                Reason: "Escalating 'network' permissions",
-                Attempted: n,
-                Child: childDir,
-                Parent: parentDir
-            });
-            throw new SecurityViolationError(`Escalating network: ${n}`);
-        }
-    }
+    const request: CapabilityRequest = {
+        network: targetConfig.config.permissions?.network || [],
+        storage: Object.entries(targetConfig.config.permissions?.storage || {}).map(([k, v]: [string, any]) => ({ path: resolve(initialConfigDir, k), access: v.access })),
+        env: targetConfig.config.permissions?.env || [],
+        bindings: targetConfig.config.permissions?.bindings || [],
+        import: targetConfig.config.permissions?.import || [],
+        gpu: !!targetConfig.config.permissions?.gpu,
+        webrtc: !!targetConfig.config.permissions?.webrtc,
+    };
 
-    if (childConfig.permissions?.bindings) {
-        for (const bindingName of childConfig.permissions.bindings) {
-            if (!parentConfig.permissions?.bindings?.includes(bindingName)) {
-                printSecurityFatal("Privilege escalation detected in nested configuration.", {
-                    Reason: "Escalating 'bindings' permissions",
-                    Attempted: bindingName,
-                    Child: childDir,
-                    Parent: parentDir
-                });
-                throw new SecurityViolationError(`Escalating binding: ${bindingName}`);
-            }
-        }
-    }
+    const finalConfig: WebrunConfig = { 
+        permissions: { ...targetConfig.config.permissions },
+        bindings: {},
+        aliases: {},
+        locations: {},
+        limits: {},
+        serve: targetConfig.config.serve,
+        experimental: targetConfig.config.experimental,
+    };
 
-    if (childConfig.permissions?.imports) {
-        const parentImports = parentConfig.permissions?.imports || [];
-        for (const i of childConfig.permissions.imports) {
-            if (!parentImports.includes(i)) {
-                printSecurityFatal("Privilege escalation detected in nested configuration.", {
-                    Reason: "Escalating 'imports' permissions",
-                    Attempted: i,
-                    Child: childDir,
-                    Parent: parentDir
-                });
-                throw new SecurityViolationError(`Escalating imports: ${i}`);
-            }
-        }
-    }
-
-    if (childConfig.permissions?.gpu && !parentConfig.permissions?.gpu) {
-        printSecurityFatal("Privilege escalation detected in nested configuration.", {
-            Reason: "Escalating 'gpu' permissions",
-            Attempted: "true",
-            Child: childDir,
-            Parent: parentDir
-        });
-        throw new SecurityViolationError("Escalating gpu");
-    }
-
-    if ((childConfig.permissions as any)?.webrtc && !(parentConfig.permissions as any)?.webrtc) {
-        printSecurityFatal("Privilege escalation detected in nested configuration.", {
-            Reason: "Escalating 'webrtc' permissions",
-            Attempted: "true",
-            Child: childDir,
-            Parent: parentDir
-        });
-        throw new SecurityViolationError("Escalating webrtc");
-    }
-
-    const parentStorageAbs = Object.entries(parentConfig.permissions!.storage!).map(([k, v]: [string, any]) => ({ path: resolve(parentDir, k), access: v.access }));
-    const childStorageAbs = Object.entries(childConfig.permissions!.storage!).map(([k, v]: [string, any]) => ({ path: resolve(childDir, k), access: v.access }));
-
-    for (const c of childStorageAbs) {
-        let covered = false;
-        for (const p of parentStorageAbs) {
-            if (c.path === p.path || c.path.startsWith(p.path + "/")) {
-                if (c.access === "write" && p.access !== "write") {
-                    continue;
-                }
-                covered = true;
-                break;
-            }
-        }
-        if (!covered) {
-            printSecurityFatal("Privilege escalation detected in nested configuration.", {
-                Reason: "Escalating 'storage' permissions",
-                Attempted: c.path,
-                Child: childDir,
-                Parent: parentDir
-            });
-            throw new SecurityViolationError(`Escalating storage: ${c.path}`);
-        }
-    }
-}
-
-export function mergeConfigurations(sys: PolicyRuntime, allConfigs: FoundConfig[], defaultDir: string): { config: WebrunConfig, configDir: string, configFound: boolean, configPaths: string[], importMapPaths: string[] } {
     const importMapPaths: string[] = [];
-    const finalConfig: WebrunConfig = { permissions: { storage: {}, network: [], env: [], bindings: [] } };
-    let finalConfigDir = defaultDir;
-    let configFound = false;
 
-    if (allConfigs.length > 0) {
-        configFound = true;
-        const mostSpecific = allConfigs[0];
-        finalConfigDir = mostSpecific.dir;
+    // Evaluate the request up the chain
+    for (let i = 0; i < allConfigs.length; i++) {
+        const sourceConfig = allConfigs[i].config;
+        const sourceDir = allConfigs[i].dir;
+        
+        // 1. Isolate Check (Airgap Mutex)
+        if (sourceConfig.isolate) {
+            for (const isolatePathRaw of sourceConfig.isolate) {
+                const isolatePath = tryRealpathSync(sys, resolve(sourceDir, isolatePathRaw)) || resolve(sourceDir, isolatePathRaw);
+                for (const reqStorage of request.storage) {
+                    const reqPath = tryRealpathSync(sys, reqStorage.path) || reqStorage.path;
+                    if (reqPath === isolatePath || reqPath.startsWith(isolatePath + "/")) {
+                        const nonIsolatedBindings = request.bindings.filter(b => {
+                            for (let j = 0; j < allConfigs.length; j++) {
+                                if (allConfigs[j].config.bindings?.[b]) {
+                                    return !allConfigs[j].config.bindings?.[b]?.isolate;
+                                }
+                            }
+                            return true; // Unresolved or not marked as isolated
+                        });
 
-        for (let i = 0; i < allConfigs.length - 1; i++) {
-            validatePrivilegeNarrowing(sys, allConfigs[i + 1].config, allConfigs[i + 1].dir, allConfigs[i].config, allConfigs[i].dir);
+                        if (request.network.length > 0 || nonIsolatedBindings.length > 0) {
+                            printSecurityFatal("Capability Request Denied: Airgap Mutex", {
+                                Reason: "Cannot request network or non-isolated bindings when accessing isolated storage.",
+                                IsolatedPath: isolatePathRaw,
+                                AttemptedStorage: reqStorage.path,
+                                SourceDir: sourceDir,
+                                RequestorDir: initialConfigDir
+                            });
+                            throw new SecurityViolationError("Airgap Mutex Violated");
+                        }
+                    }
+                }
+            }
         }
 
-        Object.assign(finalConfig.permissions!, mostSpecific.config.permissions);
+        // 2. Capabilities Check (Default or Delegated)
+        if (i > 0) {
+            const defaultPerms = sourceConfig.permissions || {};
+            let delegatedPerms: any = null;
 
-        // Empty storage = no storage (fallback to temp). We no longer inherit
-        // parent storage — configs are structurally self-contained.
+            if (defaultPerms.delegate) {
+                const canonicalRequestorDir = tryRealpathSync(sys, initialConfigDir) || initialConfigDir;
+                for (const [delegatePathRaw, perms] of Object.entries(defaultPerms.delegate)) {
+                    const delegatePath = tryRealpathSync(sys, resolve(sourceDir, delegatePathRaw)) || resolve(sourceDir, delegatePathRaw);
+                    if (canonicalRequestorDir === delegatePath || canonicalRequestorDir.startsWith(delegatePath + "/")) {
+                        delegatedPerms = perms;
+                        break;
+                    }
+                }
+            }
 
-        if (mostSpecific.config.module) {
-            finalConfig.module = mostSpecific.config.module;
+            for (const n of request.network) {
+                if (!defaultPerms.network?.includes("*") && !defaultPerms.network?.includes(n) &&
+                    !delegatedPerms?.network?.includes("*") && !delegatedPerms?.network?.includes(n)) {
+                    printSecurityFatal("Capability Request Denied: Not delegated by parent", { Reason: "Escalating 'network' permissions", Attempted: n, Child: initialConfigDir, Parent: sourceDir });
+                    throw new SecurityViolationError(`Escalating 'network' permissions: ${n}`);
+                }
+            }
+
+            for (const e of request.env) {
+                if (!defaultPerms.env?.includes("*") && !defaultPerms.env?.includes(e) &&
+                    !delegatedPerms?.env?.includes("*") && !delegatedPerms?.env?.includes(e)) {
+                    printSecurityFatal("Capability Request Denied: Not delegated by parent", { Reason: "Escalating 'env' permissions", Attempted: e, Child: initialConfigDir, Parent: sourceDir });
+                    throw new SecurityViolationError(`Escalating 'env' permissions: ${e}`);
+                }
+            }
+
+            for (const b of request.bindings) {
+                if (!defaultPerms.bindings?.includes("*") && !defaultPerms.bindings?.includes(b) &&
+                    !delegatedPerms?.bindings?.includes("*") && !delegatedPerms?.bindings?.includes(b)) {
+                    printSecurityFatal("Capability Request Denied: Not delegated by parent", { Reason: "Escalating 'bindings' permissions", Attempted: b, Child: initialConfigDir, Parent: sourceDir });
+                    throw new SecurityViolationError(`Escalating 'bindings' permissions: ${b}`);
+                }
+            }
+
+            for (const imp of request.import) {
+                if (!defaultPerms.import?.includes(imp) && !delegatedPerms?.import?.includes(imp)) {
+                    printSecurityFatal("Capability Request Denied: Not delegated by parent", { Reason: "Escalating 'import' permissions", Attempted: imp, Child: initialConfigDir, Parent: sourceDir });
+                    throw new SecurityViolationError(`Escalating 'import' permissions: ${imp}`);
+                }
+            }
+
+            if (request.gpu && !defaultPerms.gpu && !delegatedPerms?.gpu) {
+                printSecurityFatal("Capability Request Denied: Not delegated by parent", { Reason: "Escalating 'gpu' permissions", Attempted: "true", Child: initialConfigDir, Parent: sourceDir });
+                throw new SecurityViolationError("Escalating 'gpu' permissions");
+            }
+            if (request.webrtc && !defaultPerms.webrtc && !delegatedPerms?.webrtc) {
+                printSecurityFatal("Capability Request Denied: Not delegated by parent", { Reason: "Escalating 'webrtc' permissions", Attempted: "true", Child: initialConfigDir, Parent: sourceDir });
+                throw new SecurityViolationError("Escalating 'webrtc' permissions");
+            }
+
+            const parentStorageAbs = Object.entries(defaultPerms.storage || {}).map(([k, v]: [string, any]) => ({ path: resolve(sourceDir, k), access: v.access }));
+            const delegatedStorageAbs = Object.entries(delegatedPerms?.storage || {}).map(([k, v]: [string, any]) => ({ path: resolve(sourceDir, k), access: v.access }));
+            const combinedAllowedStorage = [...parentStorageAbs, ...delegatedStorageAbs];
+
+            for (const reqStore of request.storage) {
+                let covered = false;
+                for (const allowedStore of combinedAllowedStorage) {
+                    if (reqStore.path === allowedStore.path || reqStore.path.startsWith(allowedStore.path + "/")) {
+                        if (reqStore.access === "write" && allowedStore.access !== "write") {
+                            continue;
+                        }
+                        covered = true;
+                        break;
+                    }
+                }
+                if (!covered) {
+                    printSecurityFatal("Capability Request Denied: Not delegated by parent", { Reason: "Escalating 'storage' permissions", Attempted: reqStore.path, Child: initialConfigDir, Parent: sourceDir });
+                    throw new SecurityViolationError(`Escalating 'storage' permissions: ${reqStore.path}`);
+                }
+            }
+
+            if (sourceConfig.limits) {
+                if (sourceConfig.limits.timeoutMillis !== undefined && targetConfig.config.limits?.timeoutMillis !== undefined && targetConfig.config.limits.timeoutMillis > sourceConfig.limits.timeoutMillis) {
+                    printSecurityFatal("Capability Request Denied: Exceeds parent limits", { Reason: "Escalating 'timeoutMillis' limit", Child: initialConfigDir, Parent: sourceDir });
+                    throw new SecurityViolationError("Escalating 'timeoutMillis' limit");
+                }
+                if (sourceConfig.limits.memoryMB !== undefined && targetConfig.config.limits?.memoryMB !== undefined && targetConfig.config.limits.memoryMB > sourceConfig.limits.memoryMB) {
+                    printSecurityFatal("Capability Request Denied: Exceeds parent limits", { Reason: "Escalating 'memoryMB' limit", Child: initialConfigDir, Parent: sourceDir });
+                    throw new SecurityViolationError("Escalating 'memoryMB' limit");
+                }
+            }
         }
+    }
 
-        if (mostSpecific.config.experimental) {
-            finalConfig.experimental = mostSpecific.config.experimental;
-        }
+    for (let i = allConfigs.length - 1; i >= 0; i--) {
+        const cfg = allConfigs[i].config;
+        const dir = allConfigs[i].dir;
 
-        if (mostSpecific.config.serve) {
-            finalConfig.serve = mostSpecific.config.serve;
-        }
-
-        // Accumulate bindings, importMaps, and limits from all configs (parent-first order).
-        // Bindings: most-specific wins per key (parent-first, child overwrites).
-        // ImportMaps: accumulate all (parent-first order).
-        // Limits: take the minimum across all levels.
-        for (let i = allConfigs.length - 1; i >= 0; i--) {
-            const cfg = allConfigs[i].config;
-            const dir = allConfigs[i].dir;
-
-            if (cfg.bindings) {
-                if (!finalConfig.bindings) finalConfig.bindings = {};
-                for (const [k, v] of Object.entries(cfg.bindings) as [string, any][]) {
+        if (cfg.bindings) {
+            for (const [k, v] of Object.entries(cfg.bindings) as [string, any][]) {
+                if (request.bindings.includes(k)) {
                     const entry = { ...v };
                     if (entry.module && typeof entry.module === "string") {
                         entry.module = resolve(dir, entry.module);
                     }
-                    finalConfig.bindings[k] = entry;
-                }
-            }
-
-            if (cfg.importMap) {
-                importMapPaths.push(resolve(dir, cfg.importMap));
-            }
-
-            if (cfg.limits) {
-                if (!finalConfig.limits) finalConfig.limits = {};
-                if (cfg.limits.timeoutMillis !== undefined) {
-                    finalConfig.limits.timeoutMillis = finalConfig.limits.timeoutMillis === undefined
-                        ? cfg.limits.timeoutMillis
-                        : Math.min(finalConfig.limits.timeoutMillis, cfg.limits.timeoutMillis);
-                }
-                if (cfg.limits.memoryMB !== undefined) {
-                    finalConfig.limits.memoryMB = finalConfig.limits.memoryMB === undefined
-                        ? cfg.limits.memoryMB
-                        : Math.min(finalConfig.limits.memoryMB, cfg.limits.memoryMB);
+                    finalConfig.bindings![k] = entry;
                 }
             }
         }
 
-        // Prune bindings not listed in permissions.bindings.
-        if (finalConfig.bindings && finalConfig.permissions?.bindings) {
-            const allowed = finalConfig.permissions.bindings;
-            for (const key of Object.keys(finalConfig.bindings)) {
-                if (!allowed.includes(key)) {
-                    delete finalConfig.bindings[key];
+        if (cfg.aliases) {
+            for (const [k, v] of Object.entries(cfg.aliases)) {
+                finalConfig.aliases![k] = resolve(dir, v);
+            }
+        }
+
+        if (cfg.locations) {
+            for (const [k, v] of Object.entries(cfg.locations)) {
+                const resolvedKey = resolve(dir, k);
+                const resolvedValue = { ...v };
+                if (resolvedValue.importMap) {
+                    resolvedValue.importMap = resolve(dir, resolvedValue.importMap);
                 }
+                finalConfig.locations![resolvedKey] = resolvedValue;
+            }
+        }
+
+        if (cfg.importMap) {
+            importMapPaths.push(resolve(dir, cfg.importMap));
+        }
+
+        if (cfg.limits) {
+            if (cfg.limits.timeoutMillis !== undefined) {
+                finalConfig.limits!.timeoutMillis = finalConfig.limits!.timeoutMillis === undefined
+                    ? cfg.limits.timeoutMillis
+                    : Math.min(finalConfig.limits!.timeoutMillis, cfg.limits.timeoutMillis);
+            }
+            if (cfg.limits.memoryMB !== undefined) {
+                finalConfig.limits!.memoryMB = finalConfig.limits!.memoryMB === undefined
+                    ? cfg.limits.memoryMB
+                    : Math.min(finalConfig.limits!.memoryMB, cfg.limits.memoryMB);
             }
         }
     }
 
-    return { config: finalConfig, configDir: finalConfigDir, configFound, configPaths: allConfigs.map(c => c.path), importMapPaths };
-}
-
-export function resolveLocalConfiguration(sys: PolicyRuntime, currentDir: string): { config: WebrunConfig, configDir: string, configFound: boolean, configPaths: string[], importMapPaths: string[] } {
-    const allConfigs = findLocalConfigurations(sys, currentDir);
-    return mergeConfigurations(sys, allConfigs, currentDir);
+    return { config: finalConfig, configDir: initialConfigDir, configFound: true, configPaths: allConfigs.map(c => c.path), importMapPaths };
 }
 
 export function buildNodeSinkholeDependencies(sys: PolicyRuntime, isolatedTmp: string, importMapPaths: string[] = []): string {

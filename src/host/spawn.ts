@@ -1,7 +1,8 @@
 import { resolve } from "https://deno.land/std@0.224.0/path/mod.ts";
 import { printExecutionError } from "../log.ts";
 import { resolveLocalConfiguration, SecurityViolationError, type EnclavePolicy } from "../policy.ts";
-import type { HostRuntime, WebrunConfig } from "../types.ts";
+import { tryRealpathSync } from "../sys.ts";
+import type { HostRuntime, WebrunConfig, WebrunPermissions } from "../types.ts";
 
 /**
  * Starts the host-side spawn server — a binding behind the mux proxy that
@@ -68,7 +69,7 @@ export function startSpawnServer(
                         ...writableTmpPaths,
                     ];
                     if (opts.cwdPath) {
-                        const canonicalCwd = sys.realPathSync(cwd);
+                        const canonicalCwd = tryRealpathSync(sys, cwd) || cwd;
                         if (!spawnerPaths.some(p => canonicalCwd === p || canonicalCwd.startsWith(p + "/"))) {
                             throw new SecurityViolationError(
                                 `cwdPath '${cwd}' is outside spawner's allowed paths`
@@ -85,7 +86,8 @@ export function startSpawnServer(
                         // within the spawner's already-allowed paths.
                         if (cc.permissions?.storage) {
                             for (const [relPath, perm] of Object.entries(cc.permissions.storage)) {
-                                const absPath = sys.realPathSync(resolve(childResolved.configDir, relPath));
+                                const rawPath = resolve(childResolved.configDir, relPath);
+                                const absPath = tryRealpathSync(sys, rawPath) || rawPath;
                                 const access = (perm as { access: string }).access;
                                 if (access === "read" || access === "write") {
                                     const checkPaths = access === "write"
@@ -93,51 +95,69 @@ export function startSpawnServer(
                                         : spawnerPaths;
                                     if (!checkPaths.some(p => absPath === p || absPath.startsWith(p + "/"))) {
                                         throw new SecurityViolationError(
-                                            `Escalating storage ${access}: ${relPath} (${absPath})`
+                                            `Escalating 'storage' permissions: ${relPath} (${absPath})`
                                         );
                                     }
                                 }
                             }
                         }
 
+                        let delegatedPerms: WebrunPermissions | undefined = undefined;
+                        if (sc.permissions?.delegate) {
+                            const targetPath = tryRealpathSync(sys, cwd) || cwd;
+                            for (const [relPath, perms] of Object.entries(sc.permissions.delegate)) {
+                                const rawDelegatePath = resolve(spawnerConfigDir, relPath);
+                                const delegatePath = tryRealpathSync(sys, rawDelegatePath) || rawDelegatePath;
+                                if (targetPath === delegatePath || targetPath.startsWith(delegatePath + "/")) {
+                                    delegatedPerms = perms;
+                                    break;
+                                }
+                            }
+                        }
+
                         // Env: child env vars must be a subset of parent's
-                        // declared env OR explicitly provided via spawn options.
+                        // declared/delegated env OR explicitly provided via spawn options.
                         const providedEnv = new Set(Object.keys(opts.env || {}));
                         for (const e of cc.permissions?.env || []) {
-                            if (!sc.permissions?.env?.includes(e) && !providedEnv.has(e)) {
-                                throw new SecurityViolationError(`Escalating env: ${e}`);
+                            if (!delegatedPerms?.env?.includes("*") && !delegatedPerms?.env?.includes(e) &&
+                                !sc.permissions?.env?.includes("*") && !sc.permissions?.env?.includes(e) &&
+                                !providedEnv.has(e)) {
+                                throw new SecurityViolationError(`Escalating 'env' permissions: ${e}`);
                             }
                         }
 
                         // Network: child network hosts must be a subset
                         for (const n of cc.permissions?.network || []) {
-                            if (!sc.permissions?.network?.includes(n)) {
-                                throw new SecurityViolationError(`Escalating network: ${n}`);
+                            if (!delegatedPerms?.network?.includes("*") && !delegatedPerms?.network?.includes(n) &&
+                                !sc.permissions?.network?.includes("*") && !sc.permissions?.network?.includes(n)) {
+                                throw new SecurityViolationError(`Escalating 'network' permissions: ${n}`);
                             }
                         }
 
                         // Bindings: child bindings must be a subset
                         for (const b of cc.permissions?.bindings || []) {
-                            if (!sc.permissions?.bindings?.includes(b)) {
-                                throw new SecurityViolationError(`Escalating binding: ${b}`);
+                            if (!delegatedPerms?.bindings?.includes("*") && !delegatedPerms?.bindings?.includes(b) &&
+                                !sc.permissions?.bindings?.includes("*") && !sc.permissions?.bindings?.includes(b) &&
+                                !(sc.bindings && b in sc.bindings)) {
+                                throw new SecurityViolationError(`Escalating 'bindings' permissions: ${b}`);
                             }
                         }
 
                         // Limits: child limits cannot exceed spawner
                         if (sc.limits?.timeoutMillis !== undefined && cc.limits?.timeoutMillis !== undefined
                             && cc.limits.timeoutMillis > sc.limits.timeoutMillis) {
-                            throw new SecurityViolationError("Escalating timeoutMillis");
+                            throw new SecurityViolationError("Escalating 'timeoutMillis' limit");
                         }
                         if (sc.limits?.memoryMB !== undefined && cc.limits?.memoryMB !== undefined
                             && cc.limits.memoryMB > sc.limits.memoryMB) {
-                            throw new SecurityViolationError("Escalating memoryMB");
+                            throw new SecurityViolationError("Escalating 'memoryMB' limit");
                         }
                     }
                 } catch (e: any) {
                     if (!(e instanceof SecurityViolationError)) throw e;
                     const enc = new TextEncoder();
                     return new Response(
-                        enc.encode(JSON.stringify({ t: "e", c: `[Security] ${e.message}` }) + "\n" +
+                        enc.encode(JSON.stringify({ t: "e", c: `[Security Fatal] ${e.message}` }) + "\n" +
                                    JSON.stringify({ t: "x", c: 1 }) + "\n"),
                         { headers: { "Content-Type": "application/x-ndjson" } },
                     );

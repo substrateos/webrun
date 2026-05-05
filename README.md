@@ -62,22 +62,24 @@ echo "Hello from the sandbox!" > hello.txt
 Finally, run the script securely through `webrun`:
 
 ```bash
-./webrun --module main.ts
+./webrun main.ts
 ```
 
 ## SYNOPSIS
 `webrun [options] [args...]`
 
+You can pass local file paths or execute remote URLs directly (e.g. `webrun https://example.com/script.ts`). Remote scripts are bound by the exact same sandbox policies and limitations as local scripts, derived from the `webrun.json` configuration in the directory from which `webrun` was executed.
+
 ### Options
 
 - `-h, --help`
   Print the usage instructions.
+- `--dir=<path>`
+  Set the sandbox execution root directory instead of the current working directory. The policy engine will discover `webrun.json` configuration files starting from this explicit path.
 - `-e, --eval <code>`
   Evaluate the provided inline JavaScript/TypeScript code directly in the sandbox instead of executing a module.
-- `--module <name>`
-  Explicitly set the execution entrypoint using a module specifier or import map alias.
 - `--test[=<filter>]`
-  Run test suites. Discovers and runs exported functions starting with "test" inside your target script instead of the default export. Optionally filter by name substring. Supports multiple modules as positional args (e.g., `webrun --test a.test.ts b.test.ts`).
+  Run test suites. Discovers and runs exported functions starting with "test" inside your target script instead of the default export. Optionally filter by name substring. Supports multiple locations as positional args (e.g., `webrun --test a.test.ts b.test.ts`).
 - `--serve`
   Start an HTTP server that routes requests to the target module's `fetch` handler. If the target is a directory, serves static files. See [Serving](#serving) for details.
 - `--bind=<host>:<port>`
@@ -97,7 +99,17 @@ Finally, run the script securely through `webrun`:
 
 ```json
 {
-  "module": "src/main.ts",
+  "aliases": {
+    "default": "src/main.ts",
+    "worker": "src/worker.ts"
+  },
+  "locations": {
+    "src/worker.ts": {
+      "limits": {
+        "timeoutMillis": 60000
+      }
+    }
+  },
   "serve": "src/server.ts",
   "limits": {
     "timeoutMillis": 120000,
@@ -112,6 +124,9 @@ Finally, run the script securely through `webrun`:
     "network": [
       "github.com"
     ],
+    "import": [
+      "esm.sh:443"
+    ],
     "env": [
       "API_KEY",
       "DEBUG_MODE"
@@ -123,6 +138,11 @@ Finally, run the script securely through `webrun`:
 }
 ```
 
+### Aliases vs Locations
+
+- **`aliases`**: Map short names (like `default` or `worker`) to specific file paths or URLs. This allows you to run `./webrun worker` instead of typing the full path.
+- **`locations`**: Define specific constraints (limits, permissions, and import maps) that override the root configuration for a given path or directory. When a script matching a location path is executed, its sandbox is restricted to those specific overrides.
+
 #### Permission Wildcards
 
 Use `"*"` to grant unrestricted access for a permission axis:
@@ -130,8 +150,44 @@ Use `"*"` to grant unrestricted access for a permission axis:
 - **`"network": ["*"]`** — Allows outgoing requests to any domain (SSRF protection for private IP ranges is still enforced).
 - **`"env": ["*"]`** — Injects all host environment variables into the sandbox.
 
-### Default Module and Sandboxing
-You can omit explicit targeting flags (`--module`) when executing `webrun` from the command line if you define a `"module"` property in your `webrun.json`. `webrun` will automatically discover and execute this default entrypoint.
+### Permissions and Delegation
+
+`webrun` enforces strict hierarchical permission scoping. When nesting `webrun.json` files in subdirectories, a child configuration cannot escalate privileges beyond its parent. 
+
+A parent must explicitly delegate a permission subset to a child path using the `delegate` block. However, these permissions are **not** automatically granted to the child; they only set the maximum allowed ceiling. The child must still explicitly claim the permissions it needs in its own `webrun.json`:
+
+```json
+{
+  "permissions": {
+    "network": ["api.github.com", "example.com"],
+    "delegate": {
+      "agents/": {
+        "network": ["api.github.com"]
+      }
+    }
+  }
+}
+```
+
+If an script in a subdirectory attempts to declare a permission that was not explicitly delegated to it by the parent, execution will abort before the sandbox even spawns. If the parent config uses a wildcard `["*"]`, the parent must explicitly delegate the wildcard or a subset of it to the child.
+
+### Airgap Isolation
+
+You can enforce strict airgap boundaries by declaring mutually exclusive `isolate` paths in your `webrun.json`. If a script accesses an isolated storage path, `webrun` guarantees that the script cannot access the network during that execution.
+
+```json
+{
+  "isolate": ["secrets/"],
+  "permissions": {
+    "storage": {
+      "secrets/": { "access": "read" }
+    }
+  }
+}
+```
+
+### Default Location and Sandboxing
+You can run `webrun` without specifying a location from the command line if you define a `"default"` key under `"aliases"` in your `webrun.json`. `webrun` will automatically discover and execute this default entrypoint.
 
 ### Sandbox Limits
 You can strictly bound the execution of any untrusted script using the `limits` object.
@@ -142,6 +198,7 @@ You can strictly bound the execution of any untrusted script using the `limits` 
 **Hierarchical configuration**: If you place a `webrun.json` inside a subdirectory, the child configuration is still bound by its parents. A child configuration can *reduce* limits (e.g., lowering `timeoutMillis` from `5000` to `1000`), but it cannot increase them beyond what the parent configuration allows. Attempting to expand permissions or limits beyond a parent's scope will cause the script to abort.
 
 **Configuration protection**: `webrun` prevents scripts from modifying its configuration files (`webrun.json`, `package.json`, and referenced `importMap` files) or the `webrun` executable itself. If a configuration tries to grant write access to a directory containing these essential files, execution aborts immediately. This ensures that a script cannot rewrite its own sandbox rules.
+
 
 ### Import Maps
 You can specify an `importMap` path in your `webrun.json` to configure module resolution. `webrun` handles import maps with two specific behaviors:
@@ -179,7 +236,7 @@ export default async function(ctx) {
   const tmpFile = await tmpDir.getFileHandle("scratch.txt", { create: true });
 
   // Spawn isolated child sandboxes with flags and arguments
-  const child = await ctx.webrun(["--module", "child.js", "--child-flag", "--", "arg"]);
+  const child = await ctx.webrun(["child.js", "--child-flag", "--", "arg"]);
   console.log(child.exitCode, child.stdout, child.stderr);
 
   // Or evaluate code inline
@@ -263,25 +320,26 @@ Two origin strategies are supported:
 Persistent OPFS data is stored at `~/.webrun/opfs/<strategy>/<id>/fs/`. An `audit.ndjson` log in the same directory records every execution session (timestamp, arguments, config path) that accesses the persistent workspace.
 
 ### Testing Scripts
-If you run `webrun --test --module my_script.ts`, `webrun` will look for named exports that begin with `test` and execute them using the native test runner.
+If you run `webrun --test my_script.ts`, `webrun` will look for named exports that begin with `test` and execute them using the native test runner.
 
 ```bash
-# Single module
-./webrun --test --module tests/my_test.ts
+# Single location
+./webrun --test tests/my_test.ts
 
-# Multiple modules as positional args
+# Multiple locations as positional args
 ./webrun --test tests/a.test.ts tests/b.test.ts
 
 # With inline filter
-./webrun --test=specific_test --module tests/my_test.ts
+./webrun --test=specific_test tests/my_test.ts
 ```
 
 ```javascript
 export async function testMyFunction(t, ctx) {
-  // `ctx` is the standard sandbox context (args, flags, env, dir)
+  // `ctx` is the standard sandbox context (args, flags, env, dir, location)
   // `t` is a sandbox-safe test adapter providing the following API:
   
   t.log("Starting test for:", t.name);
+  t.log("Booted from URL:", ctx.location);
   
   // Basic assertions
   t.assert(1 === 1, "Math should work");
@@ -298,6 +356,7 @@ export async function testMyFunction(t, ctx) {
 }
 ```
 
+
 ### Serving
 
 The `--serve` flag starts an HTTP server that routes incoming requests to your module's `fetch` handler, following the Cloudflare Workers / Service Worker model:
@@ -312,7 +371,7 @@ export default {
 ```
 
 ```bash
-./webrun --serve --bind=127.0.0.1:8080 --module server.js
+./webrun --serve --bind=127.0.0.1:8080 server.js
 ```
 
 If the target is a directory (or no `fetch` handler is exported), `webrun` serves static files from the target path. You can define a default serve entrypoint with the `"serve"` field in `webrun.json`.
@@ -337,7 +396,7 @@ export default {
 ```
 
 > [!NOTE]
-> `upgradeWebSocket` is only available in `--serve` mode. Calling it in `--module` or `--eval` mode throws a clear error.
+> `upgradeWebSocket` is only available in `--serve` mode. Calling it in normal or `--eval` mode throws a clear error.
 
 ### Web API Runtime Environment
 `webrun` executes your code within a pristine, standardized Web API environment. It is explicitly designed to behave identically to a modern browser context:

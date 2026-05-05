@@ -1,0 +1,15 @@
+[
+  {
+    "name": "Parent alias resolves relative to parent configDir, not child",
+    "args": ["parent-tool"],
+    "cwd": "child",
+    "runner": "cli",
+    "expect": {
+      "exit_code": 1,
+      "stderr": [
+        {"contains": "parent_tool.ts"},
+        {"absent": "child/parent_tool.ts"}
+      ]
+    }
+  }
+]

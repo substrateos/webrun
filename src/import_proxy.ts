@@ -28,9 +28,30 @@ import { Buffer } from "node:buffer";
 import { generateCA, generateHostCert } from "./tls_cert.ts";
 import type { CABundle } from "./tls_cert.ts";
 
-export const BROWSER_USER_AGENT =
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) " +
-    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+import { BROWSER_USER_AGENT } from "./constants.ts";
+export { BROWSER_USER_AGENT };
+
+/**
+ * Serializes upstream response headers for proxied delivery.
+ * Strips hop-by-hop headers and produces a complete HTTP/1.1 header block
+ * with an accurate Content-Length for the (already decompressed) body.
+ */
+export function serializeProxyResponseHeaders(
+    status: number,
+    statusText: string,
+    upstreamHeaders: Headers,
+    bodyByteLength: number,
+): string {
+    // Omit hop-by-hop and encoding headers: fetch() auto-decompresses
+    // gzip/br, so forwarding content-encoding would cause double-decode.
+    // Content-length is recomputed from the actual (decompressed) body.
+    const stripped = new Set(["transfer-encoding", "content-encoding", "content-length"]);
+    const headers = [...upstreamHeaders.entries()]
+        .filter(([k]) => !stripped.has(k))
+        .map(([k, v]) => `${k}: ${v}`)
+        .join("\r\n");
+    return `HTTP/1.1 ${status} ${statusText}\r\n${headers}\r\nContent-Length: ${bodyByteLength}\r\n\r\n`;
+}
 
 /** Handle to a running MITM import proxy instance. */
 export interface ImportProxy {
@@ -44,21 +65,33 @@ export interface ImportProxy {
 
 // ── Relay: pipe bytes between Deno.Conn and a node:net Socket ───────────────
 
-function relay(denoConn: Deno.Conn, nodeSocket: net.Socket): void {
-    // Deno → Node
+export function relay(denoConn: Deno.Conn, nodeSocket: net.Socket): void {
+    // Deno → Node: read from Deno conn, write to Node socket.
+    // Must copy each chunk (subarray shares the backing buffer with the
+    // next read) and respect backpressure (wait for 'drain' when the
+    // socket's write buffer is full).
     (async () => {
         const buf = new Uint8Array(16384);
         try {
             while (true) {
                 const n = await denoConn.read(buf);
                 if (n === null) { nodeSocket.end(); break; }
-                nodeSocket.write(buf.subarray(0, n));
+                const chunk = new Uint8Array(buf.buffer, buf.byteOffset, n).slice();
+                if (!nodeSocket.write(chunk)) {
+                    await new Promise<void>(r => nodeSocket.once("drain", r));
+                }
             }
         } catch { nodeSocket.destroy(); }
     })();
-    // Node → Deno
+
+    // Node → Deno: read from Node socket, write to Deno conn.
+    // Pause the socket while an async write is in flight to prevent
+    // queuing unbounded writes against the Deno conn.
     nodeSocket.on("data", (chunk: Buffer) => {
-        try { denoConn.write(chunk); } catch { nodeSocket.destroy(); }
+        nodeSocket.pause();
+        denoConn.write(chunk)
+            .then(() => nodeSocket.resume())
+            .catch(() => nodeSocket.destroy());
     });
     nodeSocket.on("end", () => { try { denoConn.close(); } catch {} });
     nodeSocket.on("error", () => { try { denoConn.close(); } catch {} });
@@ -67,38 +100,45 @@ function relay(denoConn: Deno.Conn, nodeSocket: net.Socket): void {
 // ── Per-host TLS handler ────────────────────────────────────────────────────
 
 async function handleTlsConn(conn: Deno.TlsConn, targetHost: string): Promise<void> {
+    // HTTP/1.1 keep-alive: Deno's module loader reuses CONNECT tunnels for
+    // multiple requests to the same host. We must loop to serve all requests
+    // on the connection, not just the first one.
+    const buf = new Uint8Array(8192);
     try {
-        const buf = new Uint8Array(8192);
-        const n = await conn.read(buf);
-        if (n === null) { conn.close(); return; }
+        while (true) {
+            const n = await conn.read(buf);
+            if (n === null) break;
 
-        const raw = new TextDecoder().decode(buf.subarray(0, n));
-        const firstLine = raw.split("\r\n")[0];
+            const raw = new TextDecoder().decode(buf.subarray(0, n));
+            const firstLine = raw.split("\r\n")[0];
 
-        // Extract method and path from request line.
-        const match = firstLine.match(/^(\w+) (\S+)/);
-        const path = match ? match[2] : "/";
+            // Extract method and path from request line.
+            const match = firstLine.match(/^(\w+) (\S+)/);
+            const path = match ? match[2] : "/";
 
-        // Fetch from real target with browser UA.
-        const targetUrl = `https://${targetHost}${path}`;
-        const resp = await fetch(targetUrl, {
-            headers: { "User-Agent": BROWSER_USER_AGENT },
-            redirect: "follow",
-        });
+            // Fetch from real target with browser UA.
+            const targetUrl = `https://${targetHost}${path}`;
+            const resp = await fetch(targetUrl, {
+                headers: { "User-Agent": BROWSER_USER_AGENT },
+                redirect: "follow",
+            });
 
-        const body = await resp.arrayBuffer();
-        const statusLine = `HTTP/1.1 ${resp.status} ${resp.statusText}\r\n`;
-        const headers = [...resp.headers.entries()]
-            .filter(([k]) => k !== "transfer-encoding")
-            .map(([k, v]) => `${k}: ${v}`)
-            .join("\r\n");
-        const responseStr = `${statusLine}${headers}\r\nContent-Length: ${body.byteLength}\r\n\r\n`;
-        await conn.write(new TextEncoder().encode(responseStr));
-        await conn.write(new Uint8Array(body));
-        conn.close();
+            const body = new Uint8Array(await resp.arrayBuffer());
+            const responseStr = serializeProxyResponseHeaders(resp.status, resp.statusText, resp.headers, body.byteLength);
+            await conn.write(new TextEncoder().encode(responseStr));
+
+            // Write body in chunks to avoid overwhelming the TLS write buffer.
+            let offset = 0;
+            while (offset < body.length) {
+                const end = Math.min(offset + 16384, body.length);
+                const written = await conn.write(body.subarray(offset, end));
+                offset += written;
+            }
+        }
     } catch {
-        try { conn.close(); } catch {}
+        // Connection closed or error — normal for keep-alive teardown.
     }
+    try { conn.close(); } catch {}
 }
 
 // ── Main entry point ────────────────────────────────────────────────────────
@@ -186,12 +226,7 @@ export async function startImportProxy(): Promise<ImportProxy> {
                         redirect: "follow",
                     });
                     const body = await resp.arrayBuffer();
-                    const statusLine = `HTTP/1.1 ${resp.status} ${resp.statusText}\r\n`;
-                    const headers = [...resp.headers.entries()]
-                        .filter(([k]) => k !== "transfer-encoding")
-                        .map(([k, v]) => `${k}: ${v}`)
-                        .join("\r\n");
-                    const responseStr = `${statusLine}${headers}\r\nContent-Length: ${body.byteLength}\r\n\r\n`;
+                    const responseStr = serializeProxyResponseHeaders(resp.status, resp.statusText, resp.headers, body.byteLength);
                     socket.write(responseStr);
                     socket.write(Buffer.from(body));
                     socket.end();

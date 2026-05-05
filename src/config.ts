@@ -16,10 +16,10 @@ export interface ParsedArgs {
     serveInterfaces: { host: string; port: number }[];
     evalCode: string;
     targetScriptPath: string;
-    targetModule: string;
     sandboxArgs: string[];
     injectedArgsObj: Record<string, any>;
     filterPattern: string;
+    explicitDir?: string;
 }
 
 export function parseRawArguments(args: string[]): ParsedArgs;
@@ -38,12 +38,11 @@ export function parseRawArguments(sysOrArgs: ConfigRuntime | string[], maybeArgs
     let serveInterfaces: { host: string; port: number }[] = [];
     let evalCode = "";
     let filterPattern = "";
+    let explicitDir: string | undefined;
 
     let targetScriptPath: string = "";
-    let targetModule = "";
     const injectedArgsObj: Record<string, any> = { "--": [] };
     let onlyPositional = false;
-    let scriptFound = false;
 
     const evalIdxExt = rawArgs.findIndex(a => a === "--eval" || a === "-e");
     if (evalIdxExt !== -1) {
@@ -51,7 +50,6 @@ export function parseRawArguments(sysOrArgs: ConfigRuntime | string[], maybeArgs
             evalCode = rawArgs[evalIdxExt + 1];
             rawArgs.splice(evalIdxExt, 2);
             isEval = true;
-            scriptFound = true;
             targetScriptPath = "[eval]";
         } else {
             printUsageError("Usage: webrun --eval <code> [args...]");
@@ -125,9 +123,17 @@ export function parseRawArguments(sysOrArgs: ConfigRuntime | string[], maybeArgs
             } else {
                 val = true;
             }
-            if (key === "module") { targetModule = val as string; scriptFound = true; continue; }
+            // --module is deprecated. It's handled as a positional location argument.
             if (key === "serve") {
                 isServe = true;
+                continue;
+            }
+            if (key === "dir") {
+                explicitDir = val as string;
+                if (!explicitDir || explicitDir === true as any) {
+                    printUsageError("Usage: webrun --dir=<path>");
+                    sys.exit(1);
+                }
                 continue;
             }
             if (key === "bind" || key === "listen") {
@@ -166,10 +172,10 @@ export function parseRawArguments(sysOrArgs: ConfigRuntime | string[], maybeArgs
         serveInterfaces,
         evalCode,
         targetScriptPath: targetScriptPath!,
-        targetModule,
         sandboxArgs: rawArgs,
         injectedArgsObj,
-        filterPattern
+        filterPattern,
+        explicitDir
     };
 }
 
@@ -203,39 +209,22 @@ export function parseCommandInvocation(sysOrArgs: ConfigRuntime | string[], args
     const networkFlags = buildNetworkFlags(config.permissions?.network || []);
 
     let resolvedTarget = parsed.targetScriptPath;
-    let explicitOverride = false;
+    let resolvedLocationKey: string | undefined;
     let additionalTargets: string[] | undefined;
-    // Unified Help/Version check:
     const isHelpOrVersion = ["help", "h", "version", "v"].some(key => parsed.injectedArgsObj[key]);
-
-    if (!isHelpOrVersion && !parsed.isEval) {
-        // Additional future exclusive checks could go here if needed.
-    }
-
-    // --self-test already resolved the target in parseRawArguments.
     const isSelfTest = parsed.isSelfTest;
 
-    if (parsed.targetModule) {
-        resolvedTarget = parsed.targetModule;
-        explicitOverride = true;
-    }
-
-    // In test mode without --module, treat positional args as test module paths.
-    if (parsed.isTest && !explicitOverride && !isSelfTest) {
-        const positionalArgs: string[] = parsed.injectedArgsObj["--"] || [];
-        if (positionalArgs.length > 0) {
-            resolvedTarget = positionalArgs[0];
-            explicitOverride = true;
-            if (positionalArgs.length > 1) {
-                additionalTargets = positionalArgs.slice(1);
-            }
-            // Clear consumed positional args so they don't leak into user args.
-            parsed.injectedArgsObj["--"] = [];
+    const resolveLocation = (loc: string): { target: string, key?: string } => {
+        if (config.aliases && config.aliases[loc]) {
+            return { target: config.aliases[loc], key: loc };
         }
-    }
+        if (loc.startsWith("http://") || loc.startsWith("https://") || loc.startsWith("data:") || loc.startsWith("file://")) {
+            return { target: loc };
+        }
+        return { target: resolve(sys.cwd(), loc) };
+    };
 
-    // Implicit fallback evaluating the nearest webrun.json "module" field
-    if (!parsed.isEval && !isSelfTest && !parsed.isSelfCheck && !isHelpOrVersion) {
+    if (!parsed.isEval && !isSelfTest && !parsed.isSelfCheck) {
         if (parsed.isServe && parsed.serveInterfaces.length === 0) {
             let port = 0;
             const portEnv = computeRuntimeEnvironment(sys, ["PORT"]).PORT;
@@ -243,39 +232,66 @@ export function parseCommandInvocation(sysOrArgs: ConfigRuntime | string[], args
             parsed.serveInterfaces.push({ host: "127.0.0.1", port });
         }
 
-        if (!explicitOverride) {
-            if (parsed.isServe) {
-                if (config.serve) {
-                    resolvedTarget = resolve(configDir, config.serve);
-                } else if (config.module) {
-                    resolvedTarget = resolve(configDir, config.module);
-                } else {
-                    resolvedTarget = sys.cwd();
+        if (parsed.isTest) {
+            const positionalArgs: string[] = parsed.injectedArgsObj["--"] || [];
+            if (positionalArgs.length > 0) {
+                const firstRes = resolveLocation(positionalArgs[0]);
+                resolvedTarget = firstRes.target;
+                resolvedLocationKey = firstRes.key;
+                if (positionalArgs.length > 1) {
+                    additionalTargets = positionalArgs.slice(1).map(l => resolveLocation(l).target);
                 }
-            } else if (config.module) {
-                resolvedTarget = resolve(configDir, config.module);
+                parsed.injectedArgsObj["--"] = [];
             } else {
-                throw new Error("No execution target specified.\\nProvide a targeting flag (--module), a positional target,\\nor define a 'module' entrypoint natively in your webrun.json file.");
+                if (config.aliases && config.aliases["default"]) {
+                    const res = resolveLocation("default");
+                    resolvedTarget = res.target;
+                    resolvedLocationKey = res.key;
+                } else if (!isHelpOrVersion) {
+                    throw new Error("No test target specified.\nProvide a location, path, or define a 'default' location natively in your webrun.json file.");
+                }
+            }
+        } else {
+            const positionalArgs: string[] = parsed.injectedArgsObj["--"] || [];
+            if (positionalArgs.length > 0) {
+                const locStr = positionalArgs.shift()!;
+                const res = resolveLocation(locStr);
+                resolvedTarget = res.target;
+                resolvedLocationKey = res.key;
+            } else {
+                if (parsed.isServe) {
+                    if (config.serve) {
+                        resolvedTarget = resolve(configDir, config.serve);
+                    } else if (config.aliases && config.aliases["default"]) {
+                        const res = resolveLocation("default");
+                        resolvedTarget = res.target;
+                        resolvedLocationKey = res.key;
+                    } else {
+                        resolvedTarget = sys.cwd();
+                    }
+                } else if (config.aliases && config.aliases["default"]) {
+                    const res = resolveLocation("default");
+                    resolvedTarget = res.target;
+                    resolvedLocationKey = res.key;
+                } else if (!isHelpOrVersion) {
+                    throw new Error("No execution target specified.\nProvide a location alias, a URL, a file path, or define a 'default' location natively in your webrun.json file.");
+                }
             }
         }
     }
 
     // Validate that local file targets exist before booting the sandbox.
-    // Skip for URLs, eval, self-test, and directory-based serve targets.
     if (resolvedTarget && !parsed.isEval && !isSelfTest && !isHelpOrVersion) {
-        const isUrl = resolvedTarget.startsWith("http://") || resolvedTarget.startsWith("https://") || resolvedTarget.startsWith("data:");
+        const isUrl = resolvedTarget.startsWith("http://") || resolvedTarget.startsWith("https://") || resolvedTarget.startsWith("data:") || resolvedTarget.startsWith("file://");
         if (!isUrl) {
             try {
-                // Read a tiny chunk to check if file exists and is not a directory
-                // If it's a directory, readTextFileSync will throw 'Is a directory'
-                // If it doesn't exist, it will throw 'No such file'
                 sys.readTextFileSync(resolvedTarget);
             } catch (e: any) {
                 if (e.message?.includes("No such file")) {
-                    throw new Error(`The specified module '${resolvedTarget}' does not exist.`);
+                    throw new Error(`The specified target '${resolvedTarget}' does not exist.`);
                 }
                 if (e.message?.includes("is a directory") && action !== "serve") {
-                    throw new Error(`The specified module '${resolvedTarget}' is a directory, not a file.`);
+                    throw new Error(`The specified target '${resolvedTarget}' is a directory, not a file.`);
                 }
             }
         }
@@ -284,6 +300,7 @@ export function parseCommandInvocation(sysOrArgs: ConfigRuntime | string[], args
     return {
         action,
         targetScriptPath: resolvedTarget,
+        resolvedLocationKey,
         isNoCheck: parsed.isNoCheck,
         evalCode: parsed.evalCode,
         sandboxArgs: parsed.sandboxArgs,

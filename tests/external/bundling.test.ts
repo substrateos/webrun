@@ -50,7 +50,7 @@ export async function testBundlingBehavior(t: any) {
             }
         `);
         const evalCmd = new sys.Command(bundledExecutable, {
-            args: ["--module", testScript],
+            args: [testScript],
             cwd: runDir,
             stdout: "piped",
             stderr: "piped"
@@ -77,7 +77,7 @@ export async function testBundlingBehavior(t: any) {
             }
         `);
         const runCmd = new sys.Command(bundledExecutable, {
-            args: ["--module", script],
+            args: [script],
             cwd: sandboxDir,
             stdout: "piped",
             stderr: "piped"

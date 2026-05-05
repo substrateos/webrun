@@ -1,7 +1,7 @@
 [
   {
     "name": "ctx.tty has correct shape or is undefined",
-    "args": ["--module", "src/tty_piped.js"],
+    "args": ["src/tty_piped.js"],
     "expect": {
       "exit_code": 0,
       "stdout": [{"contains": "_OK"}]
@@ -9,7 +9,7 @@
   },
   {
     "name": "tty is importable from webrun/ctx",
-    "args": ["--module", "src/tty_import.js"],
+    "args": ["src/tty_import.js"],
     "expect": {
       "exit_code": 0,
       "stdout": [{"contains": "TTY_IMPORT_OK"}]

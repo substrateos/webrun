@@ -1,7 +1,7 @@
 [
   {
     "name": "Cloudflare Worker env context binding via HTTP probe",
-    "args": ["--serve", "--module", "worker.js"],
+    "args": ["--serve", "worker.js"],
     "cwd": "site",
     "env": { "MY_VAR": "webrun_env_value" },
     "signal": "SIGTERM",

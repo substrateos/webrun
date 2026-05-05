@@ -135,7 +135,13 @@ export function resolveCapabilities(
     ];
 
     // --- Exec paths ---
+    // On Linux, LANDLOCK_ACCESS_FS_EXECUTE also governs shared library loading
+    // via the dynamic linker. System library paths must be executable for any
+    // binary (including exec'd children) to load its dependencies.
     const execPaths = [canon(sys.execPath())];
+    if (isLinux) {
+        execPaths.push("/usr/lib", "/usr/lib64", "/lib", "/lib64");
+    }
 
     // --- Env ---
     let env: string[] | "*";

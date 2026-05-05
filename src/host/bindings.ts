@@ -1,7 +1,7 @@
 import { resolve, dirname } from "https://deno.land/std@0.224.0/path/mod.ts";
 import { printExecutionError } from "../log.ts";
 import { tryRealpathSync, resolveWebrunEntryPath } from "../sys.ts";
-import { generateSeatbeltProfile, resolveCapabilities, toSeatbeltEnclaves } from "../jail.ts";
+import { generateSeatbeltProfile, resolveCapabilities, toSeatbeltEnclaves, toLandlockPolicy } from "../jail.ts";
 import type { SandboxPaths } from "../jail.ts";
 import { evaluateEnclavePolicy } from "../policy.ts";
 import type { EnclavePolicy } from "../policy.ts";
@@ -47,7 +47,7 @@ export function setupBindingProcesses(sys: HostRuntime, config: WebrunConfig, cw
                     env,
                     processConfig.permissions?.env,
                     isolatedTmp,
-                    resolve(sys.env.get("HOME") || "/tmp", ".webrun_cache"),
+                    resolve(isolatedTmp, "deno_cache"),
                 );
 
                 if (processConfig.portEnv) allowedEnv[processConfig.portEnv] = String(port);
@@ -57,15 +57,20 @@ export function setupBindingProcesses(sys: HostRuntime, config: WebrunConfig, cw
                 let runCmd = resolvedCmdExe;
                 let runArgs = processConfig.command.slice(1);
 
+                // ── Compute binding sandbox capabilities ──
+                // Shared across macOS (seatbelt) and Linux (Landlock).
+                const bindingStorage = processConfig.permissions?.storage || { ".": { access: "read" } };
+                const processPolicy = evaluateEnclavePolicy(sys, bindingStorage, [], configDir, cwd, isolatedTmp);
+                const webrunEntryPath = resolveWebrunEntryPath(sys, import.meta.url);
+                const bindingCacheDir = resolve(isolatedTmp, "deno_cache");
+                const bindingPaths: SandboxPaths = {
+                    projectRoot: cwd, cwd, localCacheDir: bindingCacheDir,
+                    isolatedTmp, runnerTmp, opfsTmp, bindingSdksTmp,
+                    webrunEntryPath, isSourceMode: webrunEntryPath.endsWith(".ts"),
+                };
+                const bindingCaps = resolveCapabilities(sys, processPolicy, bindingPaths, [port], !!processConfig.permissions?.gpu, sys.build.os, [], []);
+
                 if (sys.build.os === "darwin") {
-                    const processPolicy = evaluateEnclavePolicy(sys, processConfig.permissions?.storage || {}, [], configDir, cwd, isolatedTmp);
-                    const webrunEntryPath = resolveWebrunEntryPath(sys, import.meta.url);
-                    const bindingPaths: SandboxPaths = {
-                        projectRoot: cwd, cwd, localCacheDir: resolve(sys.env.get("HOME") || "/tmp", ".webrun_cache"),
-                        isolatedTmp, runnerTmp, opfsTmp, bindingSdksTmp,
-                        webrunEntryPath, isSourceMode: webrunEntryPath.endsWith(".ts"),
-                    };
-                    const bindingCaps = resolveCapabilities(sys, processPolicy, bindingPaths, [port], !!processConfig.permissions?.gpu, "darwin", [], []);
                     const { readEnclaves, writeEnclaves } = toSeatbeltEnclaves(bindingCaps);
                     const logPath = resolve(logsDir, `${name}.log`);
                     const localWriteEnclaves = writeEnclaves + `\n    (literal "${logPath}")`;
@@ -77,7 +82,7 @@ export function setupBindingProcesses(sys: HostRuntime, config: WebrunConfig, cw
                         "-f", profilePath,
                         "-D", `WEBRUN_EXEC_DIR=${tryRealpathSync(sys, dirname(resolvedCmdExe)) || dirname(resolvedCmdExe)}`,
                         "-D", `WEBRUN_EXEC_PATH=${tryRealpathSync(sys, resolvedCmdExe) || resolvedCmdExe}`,
-                        "-D", `WEBRUN_SANDBOX_CACHE=${resolve(sys.env.get("HOME") || "/tmp", ".webrun_cache")}`,
+                        "-D", `WEBRUN_SANDBOX_CACHE=${bindingCacheDir}`,
                         "-D", `WEBRUN_ISOLATED_TMP=${isolatedTmp}`,
                         "-D", `WEBRUN_DENO_JSON=${resolve(cwd, "deno.json")}`,
                         "-D", `WEBRUN_DENO_JSONC=${resolve(cwd, "deno.jsonc")}`,
@@ -86,6 +91,16 @@ export function setupBindingProcesses(sys: HostRuntime, config: WebrunConfig, cw
                         cmdExe,
                         ...processConfig.command.slice(1)
                     ];
+                } else if (sys.build.os === "linux") {
+                    // Linux: Landlock wrapper applies OS-level restrictions
+                    // then spawns the actual binding command. Landlock restrictions
+                    // are inherited by all child processes regardless of runtime.
+                    const landlockPolicy = toLandlockPolicy(bindingCaps);
+                    const wrapperScript = generateLandlockWrapper(landlockPolicy, resolvedCmdExe, processConfig.command.slice(1));
+                    const wrapperPath = resolve(bindingSdksTmp, `${name}_landlock.ts`);
+                    sys.writeTextFileSync(wrapperPath, wrapperScript);
+                    runCmd = sys.execPath();
+                    runArgs = ["run", "--allow-all", "--no-check", wrapperPath];
                 }
 
                 const logPath = resolve(logsDir, `${name}.log`);
@@ -276,3 +291,58 @@ export function computeBindingEnv(
     // No permissions.env declared — return only the sandbox base set.
     return baseEnv;
 }
+/**
+ * Generates a Deno script that applies Landlock restrictions then exec's
+ * into the actual binding command. Landlock restrictions survive exec
+ * (they're kernel-level on the thread), so the binding process inherits
+ * them with no extra process layer.
+ *
+ * The wrapper runs with --allow-all (it needs FFI for Landlock syscalls
+ * and execvp), but immediately restricts the kernel-level sandbox before
+ * replacing itself with the binding.
+ */
+function generateLandlockWrapper(
+    policy: import("../types.ts").LandlockPolicy,
+    cmdExe: string,
+    cmdArgs: string[],
+): string {
+    const policyJson = JSON.stringify(policy);
+    const argv = [cmdExe, ...cmdArgs];
+    const argvJson = JSON.stringify(argv);
+
+    return `import { applyLandlockJail } from "${new URL("../landlock.ts", import.meta.url).href}";
+
+const policy = ${policyJson};
+applyLandlockJail(policy);
+
+// Landlock is now active. exec into the binding — restrictions survive exec.
+const argv = ${argvJson};
+
+const libc = Deno.dlopen("libc.so.6", {
+    execvp: { parameters: ["pointer", "pointer"], result: "i32" },
+});
+
+const encode = (s: string): Uint8Array => new TextEncoder().encode(s + "\\0");
+const file = encode(argv[0]);
+
+// Build char *argv[] — array of pointers to null-terminated strings, NULL-terminated.
+const ptrs = new BigUint64Array(argv.length + 1);
+const buffers: Uint8Array[] = [];
+for (let i = 0; i < argv.length; i++) {
+    const buf = new Uint8Array(encode(argv[i]).buffer);
+    buffers.push(buf);
+    ptrs[i] = BigInt(Deno.UnsafePointer.value(Deno.UnsafePointer.of(buf)!));
+}
+ptrs[argv.length] = 0n; // NULL terminator
+
+libc.symbols.execvp(
+    Deno.UnsafePointer.of(new Uint8Array(file.buffer)),
+    Deno.UnsafePointer.of(new Uint8Array(ptrs.buffer)),
+);
+
+// If we get here, execvp failed.
+console.error("[webrun] Fatal: execvp failed for binding:", argv[0]);
+Deno.exit(127);
+`;
+}
+

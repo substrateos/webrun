@@ -9,6 +9,7 @@
 import type { EnvironmentAdapter, AdapterStorage } from "../adapter.ts";
 import type { SandboxContextPayload, GuestRuntime } from "../types.ts";
 import { createStorageManager } from "../fs.ts";
+import { BROWSER_USER_AGENT } from "../constants.ts";
 
 /**
  * Creates a CLI adapter bound to the given GuestRuntime.
@@ -21,10 +22,6 @@ export function createCliAdapter(sys: GuestRuntime): EnvironmentAdapter {
     // Pre-scrub captures. Set during captureFetch() and used throughout.
     let nativeFetch: typeof fetch;
 
-    // Browser-like UA so CDNs (esm.sh, jsdelivr, etc.) serve browser-compatible
-    // bundles and don't block Deno-specific identifiers.
-    const BROWSER_USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-        + "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
     return {
         captureFetch(): typeof fetch {

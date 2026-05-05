@@ -2,7 +2,7 @@
   {
     "name": "Resolves relative scope keys safely against their declaring map directory",
     "args": [
-      "--module",
+      
       "child/test.js"
     ],
     "expect": {

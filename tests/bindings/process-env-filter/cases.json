@@ -2,7 +2,7 @@
   {
     "name": "Process Environment Filtering: Bootstrapped children exclusively inherit specific OS variables",
     "args": [
-      "--module",
+      
       "test.js"
     ],
     "env": {

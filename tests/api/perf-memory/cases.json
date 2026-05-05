@@ -1,3 +1,3 @@
 [
-  { "name": "Injects standardized performance memory W3C specs natively", "args": ["--module", "src/perf_memory.js"], "expect": { "exit_code": 0, "stdout": [{"contains": "SUCCESS"}] } }
+  { "name": "Injects standardized performance memory W3C specs natively", "args": ["src/perf_memory.js"], "expect": { "exit_code": 0, "stdout": [{"contains": "SUCCESS"}] } }
 ]

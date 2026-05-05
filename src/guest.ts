@@ -1,10 +1,11 @@
 import { executeServePayload } from "./serve.ts";
-import { printExecutionError, printFatalError } from "./log.ts";
+import { printExecutionErrorWithStack, printFatalError } from "./log.ts";
 import { SandboxContextPayload, GuestRuntime, adaptGlobalRuntime } from "./types.ts";
 import { createResilientStdinStream } from "./workarounds/deno/stdin.ts";
 import { runTestSuite } from "./test_harness.ts";
 import type { EnvironmentAdapter, AdapterStorage } from "./adapter.ts";
 import { createCliAdapter } from "./adapters/cli.ts";
+import { BROWSER_USER_AGENT } from "./constants.ts";
 
 // =========================================================
 // GUEST: Sandbox runtime setup and user code execution
@@ -56,9 +57,22 @@ async function executeTestPayload(sys: GuestRuntime, payload: SandboxContextPayl
         throw new WebrunExitError(0);
     }
 
-    // console.log uses Deno.core.print() which is synchronous and unbuffered —
-    // it goes directly through the OS write() syscall without Tokio queuing.
-    const print = (line: string) => console.log(line);
+    // console.log → Deno core.print → op_print → synchronous write().
+    // When stdout is a pipe in non-blocking mode, write() can return
+    // EAGAIN (WouldBlock) if the pipe buffer is full. Deno propagates
+    // this immediately rather than retrying, so we spin-wait here.
+    const print = (line: string) => {
+        for (let attempt = 0; ; attempt++) {
+            try {
+                console.log(line);
+                return;
+            } catch (e: any) {
+                if (attempt > 500 || e.name !== "WouldBlock") throw e;
+                const deadline = performance.now() + 2;
+                while (performance.now() < deadline);
+            }
+        }
+    };
 
     // Initialize the webrun/ctx singleton before user modules load.
     const { set } = await import("webrun/ctx");
@@ -81,9 +95,15 @@ async function executeTestPayload(sys: GuestRuntime, payload: SandboxContextPayl
             if (!hasLocalMatch) continue;
         }
 
+        // Build per-source ctx with the correct location for this source file.
+        const locationUrl = payload.scriptLocations?.[source];
+        const sourceCtx = locationUrl
+            ? { ...contextPayload, location: locationUrl, srcdoc: payload.srcdocs?.[locationUrl] }
+            : contextPayload;
+
         const summary = await runTestSuite(
             tests as any,
-            contextPayload,
+            sourceCtx,
             source,
             print,
             payload.filterPattern,
@@ -140,14 +160,7 @@ async function executeRunPayload(sys: GuestRuntime, payload: SandboxContextPaylo
 
 
 
-const rewritePermissionError = (msg: string): string => {
-    if (!msg) return msg;
-    if (msg.includes("run again with the --allow-")) {
-        return msg.replace(/, run again with the --allow-[a-z-]+ flag/g, "")
-            + ".\n  Hint: Update the 'permissions' object in your webrun.json to allow this operation.";
-    }
-    return msg;
-};
+
 
 function setupSandboxErrorHandlers(sys: GuestRuntime) {
     globalThis.addEventListener('unhandledrejection', (e: any) => {
@@ -161,8 +174,7 @@ function setupSandboxErrorHandlers(sys: GuestRuntime) {
             return;
         }
         e.preventDefault();
-        printExecutionError(rewritePermissionError(e.reason?.message || String(e.reason)));
-        if (e.reason?.stack) console.error(e.reason.stack);
+        printExecutionErrorWithStack(e.reason);
         sys.exit(1);
     });
 
@@ -177,8 +189,7 @@ function setupSandboxErrorHandlers(sys: GuestRuntime) {
             return;
         }
         e.preventDefault();
-        printExecutionError(rewritePermissionError(e.error?.message || String(e.error)));
-        if (e.error?.stack) console.error(e.error.stack);
+        printExecutionErrorWithStack(e.error);
         sys.exit(1);
     });
 }
@@ -230,10 +241,11 @@ async function buildContextPayload(
         args: argsPayload,
         flags: flags,
         env: payload.finalEnvVars,
-        command: payload.targetScriptPath,
         argv: [sys.execPath(), ...(payload.sandboxArgs || [])],
         dir: await storageManager.getDirectory(),
         persisted: !payload.fallbackToTemp,
+        location: payload.scriptLocations?.[payload.targetScriptPath] || payload.targetUrlHref,
+        srcdoc: payload.srcdocs?.[payload.scriptLocations?.[payload.targetScriptPath] || ""],
         bindings,
         __internalRootUrl: `file://${payload.storageRoot}/`,
         __nativeFetch: nativeFetch,
@@ -298,11 +310,16 @@ export async function executeInsideSandbox(sysOrPayload: GuestRuntime | SandboxC
     // 2. Set up OPFS storage (for navigator.storage).
     const opfsStorage = adapter.createStorage(payload, "opfs");
 
-    // 3. Set up navigator.storage (shared).
+    // 3. Set up navigator (shared).
     if (!(globalThis as any).navigator) {
         (globalThis as any).navigator = {};
     }
     (globalThis as any).navigator.storage = opfsStorage.manager;
+    Object.defineProperty((globalThis as any).navigator, "userAgent", {
+        value: BROWSER_USER_AGENT,
+        writable: false,
+        configurable: true,
+    });
 
     // 4. Set up ctx.dir storage (may differ from OPFS root).
     const ctxStorage = adapter.createStorage(payload, "ctx");
@@ -378,7 +395,7 @@ export async function executeInsideSandbox(sysOrPayload: GuestRuntime | SandboxC
             sys.exit(err.code);
             return;
         }
-        printExecutionError(rewritePermissionError(err?.message || String(err)));
+        printExecutionErrorWithStack(err);
         await new Promise(r => setTimeout(r, 10));
         sys.exit(1);
     }

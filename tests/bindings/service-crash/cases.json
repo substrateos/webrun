@@ -2,7 +2,7 @@
   {
     "name": "Service Crash Propagation: Module unhandled exceptions return native 500 status over IPC proxy",
     "args": [
-      "--module",
+      
       "test.js"
     ],
     "expect": {

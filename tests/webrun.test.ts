@@ -10,3 +10,7 @@ export * from "./jail.test.ts";
 export * from "./mux.test.ts";
 export * from "./cli_pty.test.ts";
 export * from "./security.test.ts";
+export * from "./policy.test.ts";
+export * from "./html_test.test.ts";
+export * from "./location_config.test.ts";
+export * from "./import_proxy_headers.test.ts";

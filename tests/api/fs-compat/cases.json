@@ -1,12 +1,12 @@
 [
-  { "name": "Writable stream supports W3C positional writes and truncation", "args": ["--module", "positional.js"], "cwd": "data", "expect": { "exit_code": 0 } },
-  { "name": "File yields a standard ReadableStream for W3C memory-safe chunking", "args": ["--module", "streaming.js"], "cwd": "data", "expect": { "exit_code": 0 } },
-  { "name": "Evaluates strict W3C naming constraints locally to explicitly block path traversal injections", "args": ["--module", "traversal.js"], "cwd": "data", "expect": { "exit_code": 0, "stdout": [{"contains": "BLOCKED_TRAVERSAL"}] } },
-  { "name": "Formally resolves recursive directory structures structurally using getDirectoryHandle", "args": ["--module", "nested.js"], "cwd": "data", "expect": { "exit_code": 0, "stdout": [{"contains": "NESTED_SUCCESS"}] } },
-  { "name": "Gracefully tears down local artifacts via removeEntry bindings dynamically", "args": ["--module", "remove.js"], "cwd": "data", "expect": { "exit_code": 0, "stdout": [{"contains": "REMOVED_SUCCESS"}] } },
-  { "name": "Preserves existing data when keepExistingData is true", "args": ["--module", "keep_data.js"], "cwd": "data", "expect": { "exit_code": 0, "stdout": [{"contains": "SUCCESS"}] } },
-  { "name": "Directory yields async iterator for keys/values/entries", "args": ["--module", "iterators.js"], "cwd": "data", "expect": { "exit_code": 0, "stdout": [{"contains": "ITERATORS_OK"}] } },
-  { "name": "Handles support isSameEntry and resolve", "args": ["--module", "handles.js"], "cwd": "data", "expect": { "exit_code": 0, "stdout": [{"contains": "HANDLES_OK"}] } },
-  { "name": "File arrayBuffer() resolves correctly", "args": ["--module", "arraybuffer.js"], "cwd": "data", "expect": { "exit_code": 0, "stdout": [{"contains": "ARRAYBUFFER_OK"}] } },
-  { "name": "removeEntry safely recurses on populated directories", "args": ["--module", "recursive_remove.js"], "cwd": "data", "expect": { "exit_code": 0, "stdout": [{"contains": "RECURSIVE_REMOVE_OK"}] } }
+  { "name": "Writable stream supports W3C positional writes and truncation", "args": ["positional.js"], "cwd": "data", "expect": { "exit_code": 0 } },
+  { "name": "File yields a standard ReadableStream for W3C memory-safe chunking", "args": ["streaming.js"], "cwd": "data", "expect": { "exit_code": 0 } },
+  { "name": "Evaluates strict W3C naming constraints locally to explicitly block path traversal injections", "args": ["traversal.js"], "cwd": "data", "expect": { "exit_code": 0, "stdout": [{"contains": "BLOCKED_TRAVERSAL"}] } },
+  { "name": "Formally resolves recursive directory structures structurally using getDirectoryHandle", "args": ["nested.js"], "cwd": "data", "expect": { "exit_code": 0, "stdout": [{"contains": "NESTED_SUCCESS"}] } },
+  { "name": "Gracefully tears down local artifacts via removeEntry bindings dynamically", "args": ["remove.js"], "cwd": "data", "expect": { "exit_code": 0, "stdout": [{"contains": "REMOVED_SUCCESS"}] } },
+  { "name": "Preserves existing data when keepExistingData is true", "args": ["keep_data.js"], "cwd": "data", "expect": { "exit_code": 0, "stdout": [{"contains": "SUCCESS"}] } },
+  { "name": "Directory yields async iterator for keys/values/entries", "args": ["iterators.js"], "cwd": "data", "expect": { "exit_code": 0, "stdout": [{"contains": "ITERATORS_OK"}] } },
+  { "name": "Handles support isSameEntry and resolve", "args": ["handles.js"], "cwd": "data", "expect": { "exit_code": 0, "stdout": [{"contains": "HANDLES_OK"}] } },
+  { "name": "File arrayBuffer() resolves correctly", "args": ["arraybuffer.js"], "cwd": "data", "expect": { "exit_code": 0, "stdout": [{"contains": "ARRAYBUFFER_OK"}] } },
+  { "name": "removeEntry safely recurses on populated directories", "args": ["recursive_remove.js"], "cwd": "data", "expect": { "exit_code": 0, "stdout": [{"contains": "RECURSIVE_REMOVE_OK"}] } }
 ]

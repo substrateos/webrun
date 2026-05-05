@@ -8,11 +8,75 @@ import type { SandboxPaths } from "../jail.ts";
 import type { EnclavePolicy } from "../policy.ts";
 import { evaluateEnclavePolicy, findLocalConfigurations, resolveLocalConfiguration, buildNodeSinkholeDependencies, validateSandboxSafetyBoundaries, SecurityViolationError } from "../policy.ts";
 import { startImportProxy } from "../import_proxy.ts";
-import { tryRealpathSync, tryStatSync, tryRemoveSync, resolveWebrunEntryPath } from "../sys.ts";
+import { BROWSER_USER_AGENT_HASH } from "../constants.ts";
+import { tryRealpathSync, tryStatSync, tryRemoveSync, resolveWebrunEntryPath, resolveWebrunCacheRoot } from "../sys.ts";
 import { handleCliCommands } from "./cli_commands.ts";
 import { setupBindingProcesses } from "./bindings.ts";
 import { resolveOpfsStorage } from "./opfs.ts";
 import type { MuxProxy } from "../mux.ts";
+import { processHtmlTestTargets } from "./html_test.ts";
+
+// =========================================================
+// LOCATION CONFIG RESOLUTION
+// =========================================================
+
+import type { WebrunLocationConfig, WebrunPermissions } from "../types.ts";
+
+/**
+ * Resolves the most specific location config for a given target path.
+ * Matches the target against location keys (resolved relative to configDir).
+ * Returns the matched WebrunLocationConfig or null if no match.
+ */
+export function resolveLocationConfig(
+    config: WebrunConfig,
+    _configDir: string,
+    targetPath: string,
+): WebrunLocationConfig | null {
+    if (!config.locations) return null;
+    for (const [locPath, locConfig] of Object.entries(config.locations)) {
+        // Location keys are absolute after policy merge (resolveLocalConfiguration).
+        const prefix = locPath.endsWith("/") ? locPath : locPath + "/";
+        if (targetPath === locPath || targetPath.startsWith(prefix)) {
+            return locConfig;
+        }
+    }
+    return null;
+}
+
+/**
+ * Applies a matched location config onto the root config, returning the
+ * effective permissions. Merge semantics:
+ *   - permissions: location replaces root (narrowing, not merging)
+ *   - limits: location fields override root fields (shallow merge)
+ *   - bindings: location entries override root entries (shallow merge)
+ *   - importMap: returned for the caller to append to importMapPaths
+ *
+ * Mutates config.permissions, config.limits, and config.bindings in place.
+ * Returns the active permissions for downstream use.
+ */
+export function applyLocationOverrides(
+    config: WebrunConfig,
+    location: WebrunLocationConfig,
+): { activePerms: WebrunPermissions } {
+    let activePerms = config.permissions || {};
+    if (location.permissions) {
+        activePerms = location.permissions;
+        config.permissions = activePerms;
+    }
+    if (location.limits) {
+        config.limits = {
+            ...config.limits,
+            ...location.limits,
+        };
+    }
+    if (location.bindings) {
+        config.bindings = {
+            ...config.bindings,
+            ...location.bindings,
+        };
+    }
+    return { activePerms };
+}
 
 // =========================================================
 // HOST: Process lifecycle, binding orchestration, and cleanup
@@ -87,6 +151,8 @@ async function buildSandboxExecutionConfig(
         configDir: projectRoot,
         runnerTmp,
         spawnToken,
+        scriptLocations: invocation.scriptLocations,
+        srcdocs: invocation.srcdocs,
     };
 
     let payloadObject: SandboxContextPayload;
@@ -131,7 +197,7 @@ async function buildSandboxExecutionConfig(
         //   - deno.land, jsr.io: WebRun's own vendored imports use these
         //     specifiers, and Deno checks them against --allow-import even
         //     when vendor:true resolves them locally
-        ["127.0.0.1", "deno.land", "jsr.io", ...(config.permissions?.imports || [])],
+        ["127.0.0.1", "deno.land", "jsr.io", ...(config.permissions?.import || [])],
     );
 
     const innerRuntimeArgs = buildRuntimeArgs({
@@ -196,23 +262,37 @@ export async function spawnSandboxProcess(sys: HostRuntime, cwd: string, args: s
 }
 
 async function _spawnSandboxProcess(sys: HostRuntime, cwd: string, args: string[]) {
-    // 1. Setup Stable Paths & Config
-    const projectRoot = sys.realPathSync(cwd);
-    const localCacheDir = (() => {
-        const d = resolve(sys.env.get("HOME") || "/tmp", ".webrun_cache");
-        sys.mkdirSync(d, { recursive: true });
-        return sys.realPathSync(d);
-    })();
-
     // 1a. Parse arguments and resolve configuration BEFORE allocating temp dirs.
     // This lets check-only short-circuit without wasted allocation.
     const argsCopy = args.slice();
     const peekedArgs = parseRawArguments(sys, argsCopy);
+    if (peekedArgs.explicitDir) {
+        cwd = tryRealpathSync(sys, resolve(cwd, peekedArgs.explicitDir)) || resolve(cwd, peekedArgs.explicitDir);
+        args = peekedArgs.sandboxArgs;
+    }
+
+    // 1. Setup Stable Paths & Config
+    const projectRoot = sys.realPathSync(cwd);
+    const localCacheDir = (() => {
+        const webrunCache = resolveWebrunCacheRoot(sys.env);
+
+        // Place the Deno module cache under a UA-keyed subdirectory so that
+        // changing the browser UA (which causes CDNs like esm.sh to serve
+        // different build targets) automatically invalidates stale modules.
+        const d = resolve(webrunCache, "modules", BROWSER_USER_AGENT_HASH);
+        sys.mkdirSync(d, { recursive: true });
+        return sys.realPathSync(d);
+    })();
+
     let configResolveDir = cwd;
     if (!peekedArgs.isEval) {
         let explicitPath = "";
-        if (peekedArgs.targetModule && !peekedArgs.targetModule.startsWith("http")) explicitPath = peekedArgs.targetModule;
-        else if (peekedArgs.targetScriptPath && peekedArgs.targetScriptPath !== "") explicitPath = peekedArgs.targetScriptPath;
+        const positionalArgs: string[] = peekedArgs.injectedArgsObj["--"] || [];
+        if (!peekedArgs.isSelfTest && positionalArgs.length > 0 && !positionalArgs[0].startsWith("http") && !positionalArgs[0].startsWith("data:")) {
+            explicitPath = positionalArgs[0];
+        } else if (peekedArgs.targetScriptPath && peekedArgs.targetScriptPath !== "") {
+            explicitPath = peekedArgs.targetScriptPath;
+        }
 
         if (explicitPath) {
             const resolvedPath = tryRealpathSync(sys, explicitPath) || resolve(cwd, explicitPath);
@@ -272,7 +352,30 @@ async function _spawnSandboxProcess(sys: HostRuntime, cwd: string, args: string[
     // storage path containment checks work correctly.
     const configBelowCwd = configFound && configDir.startsWith(projectRoot + "/");
     const effectiveCwd = configBelowCwd ? configDir : cwd;
-    const policy = evaluateEnclavePolicy(sys, config.permissions?.storage || {}, config.permissions?.bindings || [], configDir, effectiveCwd, isolatedTmp);
+
+    let activePerms = config.permissions || {};
+    const matchedLocation = resolveLocationConfig(config, configDir, invocation.targetScriptPath);
+    if (matchedLocation) {
+        ({ activePerms } = applyLocationOverrides(config, matchedLocation));
+        if (matchedLocation.importMap) {
+            // importMap is absolute after policy merge (resolveLocalConfiguration).
+            importMapPaths.push(matchedLocation.importMap);
+        }
+    }
+
+    if (invocation.action === "test" && peekedArgs.isSelfTest) {
+        // The self-test harness needs wildcard capabilities to orchestrate tests
+        // and spawn sub-processes with various limits.
+        activePerms = {
+            network: ["*"],
+            env: ["*"],
+            bindings: ["*"],
+            storage: { ".": { access: "read" } }
+        };
+        config.permissions = activePerms;
+    }
+
+    const policy = evaluateEnclavePolicy(sys, activePerms.storage || {}, activePerms.bindings || [], configDir, effectiveCwd, isolatedTmp);
 
     const protectedFiles: string[] = [...configPaths, ...importMapPaths];
 
@@ -294,6 +397,16 @@ async function _spawnSandboxProcess(sys: HostRuntime, cwd: string, args: string[
     }
 
     validateSandboxSafetyBoundaries(sys, policy, cwd, protectedFiles, allowedWriteEnclaves);
+
+    // Process HTML targets before finalizing the import map.
+    // Extracts inline scripts and import maps from .html files, writes
+    // them to runnerTmp, and updates invocation targets + importMapPaths.
+    // Each extracted script is registered in invocation.scriptLocations with
+    // its original HTML file URL and source.
+    await processHtmlTestTargets(
+        sys, invocation, runnerTmp, importMapPaths,
+        activePerms.network || [],
+    );
 
     const importMapPath = buildNodeSinkholeDependencies(sys, isolatedTmp, importMapPaths);
 

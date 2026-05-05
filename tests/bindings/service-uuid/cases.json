@@ -2,7 +2,7 @@
   {
     "name": "UUID Injection Context: Injects capabilities into ctx.bindings mapped to unforgeable schemas",
     "args": [
-      "--module",
+      
       "test.js"
     ],
     "expect": {

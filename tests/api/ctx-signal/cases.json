@@ -1,7 +1,7 @@
 [
   {
     "name": "ctx.signal is an AbortSignal with initial aborted=false",
-    "args": ["--module", "src/abort_signal_check.js"],
+    "args": ["src/abort_signal_check.js"],
     "expect": {
       "exit_code": 0,
       "stdout": [{"contains": "ABORTED_FALSE"}, {"contains": "IS_ABORT_SIGNAL"}]
@@ -9,7 +9,7 @@
   },
   {
     "name": "ctx.signal receives SIGTERM and handler runs",
-    "args": ["--module", "src/trap_sigterm.js"],
+    "args": ["src/trap_sigterm.js"],
     "signal": "SIGTERM",
     "timeout_ms": 5000,
     "expect": {
@@ -20,7 +20,7 @@
   },
   {
     "name": "ctx.signal receives SIGINT and handler runs",
-    "args": ["--module", "src/trap_sigint.js"],
+    "args": ["src/trap_sigint.js"],
     "signal": "SIGINT",
     "timeout_ms": 5000,
     "expect": {
@@ -31,7 +31,7 @@
   },
   {
     "name": "ctx.signal receives SIGUSR1 without termination",
-    "args": ["--module", "src/trap_sigusr1.js"],
+    "args": ["src/trap_sigusr1.js"],
     "signal": "SIGUSR1",
     "timeout_ms": 5000,
     "expect": {
@@ -42,7 +42,7 @@
   },
   {
     "name": "Multiple signal listeners fire in registration order",
-    "args": ["--module", "src/multi_listener.js"],
+    "args": ["src/multi_listener.js"],
     "signal": "SIGTERM",
     "timeout_ms": 5000,
     "expect": {
@@ -53,18 +53,18 @@
   },
   {
     "name": "Unhandled SIGTERM auto-exits with conventional code 143",
-    "args": ["--module", "src/unhandled_sigterm.js"],
+    "args": ["src/unhandled_sigterm.js"],
     "signal": "SIGTERM",
     "timeout_ms": 5000,
     "expect": {
       "exit_code": 143,
       "ready": { "stdout": [{"contains": "READY"}] },
-      "stderr": [{"absent": "[Execution Error]"}]
+      "stderr": [{"absent": "Uncaught"}]
     }
   },
   {
     "name": "SIGTERM natively interrupts infinite loops when unintercepted",
-    "args": ["--module", "src/while_true.js"],
+    "args": ["src/while_true.js"],
     "signal": "SIGTERM",
     "timeout_ms": 5000,
     "expect": {

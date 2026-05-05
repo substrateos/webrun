@@ -1,7 +1,7 @@
 [
   {
     "name": "Hierarchical Scope Enforcement: Rejects nested sandbox requests if explicitly narrowing ungranted bindings",
-    "args": ["--module", "test.js"],
+    "args": ["test.js"],
     "cwd": "child",
     "expect": {
       "exit_code": 0,

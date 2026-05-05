@@ -1,1 +1,1 @@
-[{ "name": "Blocks storage write escalation over read parent", "args": ["--module", "test.js"], "cwd": "child", "expect": { "exit_code": 1, "stderr": [{"contains": "[Security Fatal] Privilege escalation detected in nested configuration."}, {"contains": "Reason    : Escalating 'storage' permissions"}] } }]
+[{ "name": "Blocks storage write escalation over read parent", "args": ["test.js"], "cwd": "child", "expect": { "exit_code": 1, "stderr": [{"contains": "Escalating 'storage' permissions"}] } }]

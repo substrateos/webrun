@@ -58,7 +58,7 @@ export async function testGlobalsDeno(t: any) {
             const runDir = sys.realPathSync(sys.makeTempDirSync({ prefix: "gbl_" }));
             copyDirRecursive(dir, runDir);
 
-            const args = def.args || ["--module", "main.ts"];
+            const args = def.args || ["main.ts"];
             const scriptPath = args[args.length - 1];
             const cwd = def.cwd ? join(runDir, def.cwd) : runDir;
             const fullScript = join(cwd, scriptPath);

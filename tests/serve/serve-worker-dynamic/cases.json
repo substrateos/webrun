@@ -1,7 +1,7 @@
 [
   {
     "name": "Dynamic Worker: echoes request body",
-    "args": ["--serve", "--module", "worker.js"],
+    "args": ["--serve", "worker.js"],
     "cwd": "site",
     "signal": "SIGTERM",
     "timeout_ms": 5000,
@@ -22,7 +22,7 @@
   },
   {
     "name": "Dynamic Worker: JSON route with method reflection",
-    "args": ["--serve", "--module", "worker.js"],
+    "args": ["--serve", "worker.js"],
     "cwd": "site",
     "signal": "SIGTERM",
     "timeout_ms": 5000,
@@ -41,7 +41,7 @@
   },
   {
     "name": "Dynamic Worker: custom status codes",
-    "args": ["--serve", "--module", "worker.js"],
+    "args": ["--serve", "worker.js"],
     "cwd": "site",
     "signal": "SIGTERM",
     "timeout_ms": 5000,
@@ -56,7 +56,7 @@
   },
   {
     "name": "Dynamic Worker: 404 for unknown routes",
-    "args": ["--serve", "--module", "worker.js"],
+    "args": ["--serve", "worker.js"],
     "cwd": "site",
     "signal": "SIGTERM",
     "timeout_ms": 5000,

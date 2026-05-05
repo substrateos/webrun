@@ -24,7 +24,7 @@ export async function testServeDynamic(t: any) {
         sys.writeTextFileSync(`${tmpApi}/api.js`, "export const answer = 42; export function calculate() { return answer; }");
 
         const p = new sys.Command(WEBRUN_BIN, {
-            args: ["--serve", `--bind=127.0.0.1:${port}`, "--module", "api.js"],
+            args: ["--serve", `--bind=127.0.0.1:${port}`, "api.js"],
             cwd: tmpApi,
             stdout: "inherit",
             stderr: "inherit"
@@ -68,7 +68,7 @@ export default {
 `);
 
         const p = new sys.Command(WEBRUN_BIN, {
-            args: ["--serve", `--bind=127.0.0.1:${port}`, "--module", "ws_server.js"],
+            args: ["--serve", `--bind=127.0.0.1:${port}`, "ws_server.js"],
             cwd: tmpApi,
             stdout: "null",
             stderr: "null"

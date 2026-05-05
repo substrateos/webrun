@@ -1,0 +1,13 @@
+{
+  "aliases": {
+    "parent-tool": "./parent_tool.ts"
+  },
+  "permissions": {
+    "storage": { ".": { "access": "read" } },
+    "delegate": {
+      "./child": {
+        "storage": { "..": { "access": "read" } }
+      }
+    }
+  }
+}

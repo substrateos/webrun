@@ -2,7 +2,7 @@
   {
     "name": "Runtime Subprocess Crash: Sandbox intercepts crash gracefully, logs tail simulation and stderr",
     "args": [
-      "--module",
+      
       "test.js"
     ],
     "expect": {

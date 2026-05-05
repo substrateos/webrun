@@ -1,7 +1,7 @@
 [
   {
     "name": "Blocks path traversal attacks in storage permissions explicitly",
-    "args": ["--module", "test.js"],
+    "args": ["test.js"],
     "expect": {
       "exit_code": 1,
       "stderr": [

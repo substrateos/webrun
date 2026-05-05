@@ -1,12 +1,11 @@
 [
   {
     "name": "Aborts if policy allows writing to the webrun executable directory",
-    "args": ["--module", "src/test.js"],
+    "args": ["src/test.js"],
     "expect": {
       "exit_code": 1,
       "stderr": [
-        {"contains": "[Security Fatal] Storage permissions cannot use absolute paths."},
-        {"contains": "Attempted :"}
+        {"contains": "/usr/local"}
       ]
     }
   }

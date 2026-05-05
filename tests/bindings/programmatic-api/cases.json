@@ -1,37 +1,37 @@
 [
   {
     "name": "ctx.webrun correctly evaluates inline code",
-    "args": ["--module", "src/eval.js"],
+    "args": ["src/eval.js"],
     "expect": { "exit_code": 0, "stdout": [{"contains": "EVAL_OK"}] }
   },
   {
     "name": "ctx.webrun correctly executes target script in a sub-worker",
-    "args": ["--module", "src/parent.js"],
+    "args": ["src/parent.js"],
     "expect": { "exit_code": 0, "stdout": [{"contains": "PARENT_OK"}] }
   },
   {
     "name": "ctx.webrun isolates CLI arguments from the parent explicitly",
-    "args": ["--module", "src/parent_args.js", "--parent-flag", "--", "parent-positional"],
+    "args": ["src/parent_args.js", "--parent-flag", "--", "parent-positional"],
     "expect": { "exit_code": 0, "stdout": [{"contains": "PARENT_ARGS_OK"}] }
   },
   {
     "name": "ctx.webrun respects SandboxOptions timeout constraints",
-    "args": ["--module", "src/timeout.js"],
+    "args": ["src/timeout.js"],
     "expect": { "exit_code": 0, "stdout": [{"contains": "TIMEOUT_OK"}] }
   },
   {
     "name": "ctx.webrun correctly delegates positional arguments independent of explicit target routing",
-    "args": ["--module", "src/pos_parent.js"],
+    "args": ["src/pos_parent.js"],
     "expect": { "exit_code": 0, "stdout": [{"contains": "POS_TARGET_OK"}] }
   },
   {
     "name": "ctx.webrun throws target missing error matching CLI instead of implicit inheritance",
-    "args": ["--module", "src/no_target.js"],
+    "args": ["src/no_target.js"],
     "expect": { "exit_code": 0, "stdout": [{"contains": "STRICT_TARGET_OK"}] }
   },
   {
     "name": "ctx injects standard Web Streams for stdin, stdout and stderr securely",
-    "args": ["--module", "src/stream.js"],
+    "args": ["src/stream.js"],
     "expect": { "exit_code": 0, "stdout": [{"contains": "STREAMS_OK"}] }
   }
 ]

@@ -112,7 +112,7 @@ export async function runBatchCase(caseDir: DirHandle, def: CaseDefinition): Pro
     await copyDir(caseDir, runDir);
 
     const cwd = def.cwd ? await subdir(runDir, def.cwd) : runDir;
-    const args = def.args || ["--module", "main.ts"];
+    const args = def.args || ["main.ts"];
 
     const result = await webrun(args, {
         cwd,

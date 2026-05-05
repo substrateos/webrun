@@ -2,7 +2,7 @@
   {
     "name": "RTCPeerConnection is exposed globally and establishes Loopback DataChannel seamlessly",
     "args": [
-      "--module",
+      
       "p2p.js"
     ],
     "expect": {

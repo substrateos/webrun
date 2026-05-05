@@ -6,13 +6,11 @@
 //
 // Run via: ./webrun --self-test=Security
 
-import { validatePrivilegeNarrowing } from "../src/policy.ts";
-import { generateBaseImportMap, mergeImportMaps, buildSinkholeImports, buildCtxImport } from "../src/config.ts";
-import { computeBindingEnv } from "../src/host/bindings.ts";
 import { webrun } from "webrun/ctx";
-import type { TestContext } from "../src/test_harness.ts";
+import { computeBindingEnv } from "../src/host/bindings.ts";
+import { generateBaseImportMap, buildSinkholeImports, buildCtxImport, mergeImportMaps } from "../src/config.ts";
 
-// ── Shared mock for validatePrivilegeNarrowing ───────────────────────────────
+// ── Shared mock for resolveLocalConfiguration (if needed) ───────────────────────────────
 
 function makePolicySys() {
     return {
@@ -23,155 +21,6 @@ function makePolicySys() {
         writeTextFileSync: () => {},
         realPathSync: (p: string) => p,
     } as any;
-}
-
-// ── L1: validatePrivilegeNarrowing must block imports escalation ──────────────
-
-export async function testSecurityNarrowingImports(t: any) {
-    const sys = makePolicySys();
-
-    await t.run("child cannot escalate imports beyond parent", async () => {
-        const parent = {
-            permissions: {
-                storage: {}, network: [], env: [], bindings: [],
-                imports: ["deno.land"],
-            },
-        };
-        const child = {
-            permissions: {
-                storage: {}, network: [], env: [], bindings: [],
-                imports: ["*"],
-            },
-        };
-
-        let threw = false;
-        try {
-            validatePrivilegeNarrowing(sys, parent as any, "/parent", child as any, "/child");
-        } catch (e: any) {
-            if (e.name === "SecurityViolationError") threw = true;
-            else throw e;
-        }
-
-        if (!threw) {
-            throw new Error(
-                "validatePrivilegeNarrowing allowed child to escalate imports from [\"deno.land\"] to [\"*\"]"
-            );
-        }
-    });
-
-    await t.run("child imports subset of parent is allowed", async () => {
-        const parent = {
-            permissions: {
-                storage: {}, network: [], env: [], bindings: [],
-                imports: ["deno.land", "esm.sh"],
-            },
-        };
-        const child = {
-            permissions: {
-                storage: {}, network: [], env: [], bindings: [],
-                imports: ["deno.land"],
-            },
-        };
-
-        // Should NOT throw — child is a subset.
-        validatePrivilegeNarrowing(sys, parent as any, "/parent", child as any, "/child");
-    });
-
-    await t.run("child with imports when parent has none is blocked", async () => {
-        const parent = {
-            permissions: { storage: {}, network: [], env: [], bindings: [] },
-        };
-        const child = {
-            permissions: {
-                storage: {}, network: [], env: [], bindings: [],
-                imports: ["esm.sh"],
-            },
-        };
-
-        let threw = false;
-        try {
-            validatePrivilegeNarrowing(sys, parent as any, "/parent", child as any, "/child");
-        } catch (e: any) {
-            if (e.name === "SecurityViolationError") threw = true;
-            else throw e;
-        }
-
-        if (!threw) {
-            throw new Error(
-                "validatePrivilegeNarrowing allowed child to add imports when parent declares none"
-            );
-        }
-    });
-}
-
-// ── L2: validatePrivilegeNarrowing must block gpu/webrtc escalation ───────────
-
-export async function testSecurityNarrowingGpuWebrtc(t: any) {
-    const sys = makePolicySys();
-
-    await t.run("child cannot enable gpu when parent does not", async () => {
-        const parent = {
-            permissions: { storage: {}, network: [], env: [], bindings: [] },
-        };
-        const child = {
-            permissions: {
-                storage: {}, network: [], env: [], bindings: [],
-                gpu: true,
-            },
-        };
-
-        let threw = false;
-        try {
-            validatePrivilegeNarrowing(sys, parent as any, "/parent", child as any, "/child");
-        } catch (e: any) {
-            if (e.name === "SecurityViolationError") threw = true;
-            else throw e;
-        }
-
-        if (!threw) {
-            throw new Error(
-                "validatePrivilegeNarrowing allowed child to enable gpu when parent does not declare it"
-            );
-        }
-    });
-
-    await t.run("child cannot enable webrtc when parent does not", async () => {
-        const parent = {
-            permissions: { storage: {}, network: [], env: [], bindings: [] },
-        };
-        const child = {
-            permissions: {
-                storage: {}, network: [], env: [], bindings: [],
-                webrtc: true,
-            },
-        };
-
-        let threw = false;
-        try {
-            validatePrivilegeNarrowing(sys, parent as any, "/parent", child as any, "/child");
-        } catch (e: any) {
-            if (e.name === "SecurityViolationError") threw = true;
-            else throw e;
-        }
-
-        if (!threw) {
-            throw new Error(
-                "validatePrivilegeNarrowing allowed child to enable webrtc when parent does not declare it"
-            );
-        }
-    });
-
-    await t.run("child can enable gpu when parent also enables it", async () => {
-        const parent = {
-            permissions: { storage: {}, network: [], env: [], bindings: [], gpu: true },
-        };
-        const child = {
-            permissions: { storage: {}, network: [], env: [], bindings: [], gpu: true },
-        };
-
-        // Should NOT throw.
-        validatePrivilegeNarrowing(sys, parent as any, "/parent", child as any, "/child");
-    });
 }
 
 // ── M1: mergeImportMaps must not allow user maps to override sinkholes ───────

@@ -1,1 +1,1 @@
-[{ "name": "Permits valid narrowing of parent memoryMB limit", "args": ["--module", "test.js"], "cwd": "child", "expect": { "exit_code": 137, "stderr": [{"contains": "[Fatal] Memory limit exceeded!"}, {"contains": "Current:"}] } }]
+[{ "name": "Permits valid narrowing of parent memoryMB limit", "args": ["test.js"], "cwd": "child", "expect": { "exit_code": 137, "stderr": [{"contains": "[Fatal] Memory limit exceeded!"}, {"contains": "Current:"}] } }]

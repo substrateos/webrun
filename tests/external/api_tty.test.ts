@@ -32,7 +32,7 @@ export default async function(ctx) {
     console.log("LIFECYCLE_OK");
 }`);
         const proc = new sys.Command(WEBRUN_BIN, {
-            args: ["--module", "tty_lifecycle.js"], cwd: tmpApi,
+            args: ["tty_lifecycle.js"], cwd: tmpApi,
             stdout: "piped", stderr: "piped", stdin: "inherit"
         });
         const out = await proc.output();
@@ -58,7 +58,7 @@ export default async function(ctx) {
     throw new Error("DELIBERATE_CRASH");
 }`);
         const proc = new sys.Command(WEBRUN_BIN, {
-            args: ["--module", "tty_cleanup.js"], cwd: tmpApi,
+            args: ["tty_cleanup.js"], cwd: tmpApi,
             stdout: "piped", stderr: "piped", stdin: "inherit"
         });
         const out = await proc.output();
@@ -101,7 +101,7 @@ export default async function(ctx) {
         }
 
         const proc = new sys.Command(WEBRUN_BIN, {
-            args: ["--module", "tty_timeout.js"], cwd: tmpApi,
+            args: ["tty_timeout.js"], cwd: tmpApi,
             stdout: "piped", stderr: "piped", stdin: "inherit"
         });
         const out = await proc.output();
@@ -157,7 +157,7 @@ export default async function(ctx) {
     }
 }`);
         const proc = new sys.Command(WEBRUN_BIN, {
-            args: ["--module", "tty_eagain.js"], cwd: tmpApi,
+            args: ["tty_eagain.js"], cwd: tmpApi,
             stdout: "piped", stderr: "piped", stdin: "inherit"
         });
         const out = await proc.output();

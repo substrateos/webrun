@@ -108,7 +108,7 @@ export async function runCliCase(caseDir: string, def: CaseDefinition): Promise<
     copyDirRecursive(caseDir, runDir);
 
     const cwd = def.cwd ? join(runDir, def.cwd) : runDir;
-    const args = def.args || ["--module", "main.ts"];
+    const args = def.args || ["main.ts"];
 
     const cmd = new sys.Command(WEBRUN_BIN, {
         args,

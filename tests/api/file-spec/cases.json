@@ -1,27 +1,27 @@
 [
   {
     "name": "File W3C Compliance: constructor, instanceof, lastModified, type",
-    "args": ["--module", "constructor.js"],
+    "args": ["constructor.js"],
     "expect": { "exit_code": 0, "stdout": [{"contains": "SUCCESS"}] }
   },
   {
     "name": "File W3C Compliance: slice() returns correct byte ranges lazily",
-    "args": ["--module", "slice.js"],
+    "args": ["slice.js"],
     "expect": { "exit_code": 0, "stdout": [{"contains": "SLICE_OK"}] }
   },
   {
     "name": "SyncAccessHandle: sequential cursor tracking without explicit position",
-    "args": ["--module", "sync_cursor.js"],
+    "args": ["sync_cursor.js"],
     "expect": { "exit_code": 0, "stdout": [{"contains": "SYNC_CURSOR_OK"}] }
   },
   {
     "name": "SyncAccessHandle: read past EOF returns 0 bytes",
-    "args": ["--module", "eof.js"],
+    "args": ["eof.js"],
     "expect": { "exit_code": 0, "stdout": [{"contains": "EOF_OK"}] }
   },
   {
     "name": "Error types: TypeMismatchError and NotFoundError",
-    "args": ["--module", "errors.js"],
+    "args": ["errors.js"],
     "expect": { "exit_code": 0, "stdout": [{"contains": "ERRORS_OK"}] }
   }
 ]

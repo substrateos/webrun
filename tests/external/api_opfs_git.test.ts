@@ -52,11 +52,11 @@ export default async function() {
     }
 }`);
 
-        const wcmd = new sys.Command(WEBRUN_BIN, { args: ["--module", "write.js"], cwd: tmpApi, stdout: "null", stderr: "inherit" });
+        const wcmd = new sys.Command(WEBRUN_BIN, { args: ["write.js"], cwd: tmpApi, stdout: "null", stderr: "inherit" });
         const wout = await wcmd.output();
         if (wout.code !== 0) throw new Error("Write failed");
 
-        const rcmd = new sys.Command(WEBRUN_BIN, { args: ["--module", "read.js"], cwd: tmpApi, stdout: "null", stderr: "inherit" });
+        const rcmd = new sys.Command(WEBRUN_BIN, { args: ["read.js"], cwd: tmpApi, stdout: "null", stderr: "inherit" });
         const rout = await rcmd.output();
         if (rout.code !== 0) throw new Error("Read failed - OPFS did not persist");
 
@@ -66,7 +66,7 @@ export default async function() {
         }));
         sys.writeTextFileSync(`${badApi}/write.js`, `export default async function() {}`);
 
-        const errcmd = new sys.Command(WEBRUN_BIN, { args: ["--module", "write.js"], cwd: badApi, stdout: "null", stderr: "piped" });
+        const errcmd = new sys.Command(WEBRUN_BIN, { args: ["write.js"], cwd: badApi, stdout: "null", stderr: "piped" });
         const errout = await errcmd.output();
         if (errout.code === 0) throw new Error("Expected git error boundary to enforce fatal crash, but it succeeded.");
         const stderrStr = new TextDecoder().decode(errout.stderr);

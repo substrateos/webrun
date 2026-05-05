@@ -1,0 +1,12 @@
+[
+  {
+    "name": "Location-scoped timeout kills slow script",
+    "args": ["slow.ts"],
+    "runner": "cli",
+    "timeout_ms": 5000,
+    "expect": {
+      "exit_code": "nonzero",
+      "stdout": [{"absent": "COMPLETED_WITHOUT_TIMEOUT"}]
+    }
+  }
+]

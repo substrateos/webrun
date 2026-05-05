@@ -71,5 +71,5 @@ export function createResilientStdinStream(stdin?: { readable?: ReadableStream; 
                 }
             }
         }
-    });
+    }, { highWaterMark: 0 });
 }

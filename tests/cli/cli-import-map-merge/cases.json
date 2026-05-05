@@ -2,7 +2,7 @@
   {
     "name": "Merges parent and child import maps with child precedence",
     "args": [
-      "--module",
+      
       "test.js"
     ],
     "cwd": "child",

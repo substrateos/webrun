@@ -3,7 +3,7 @@
     "name": "--check-only catches TS type errors and does not execute",
     "args": [
       "--check-only",
-      "--module",
+      
       "invalid_types.ts"
     ],
     "expect": {
@@ -31,7 +31,7 @@
     "name": "--check-only catches JS syntax errors and does not execute (with module)",
     "args": [
       "--check-only",
-      "--module",
+      
       "invalid_syntax.js"
     ],
     "expect": {
@@ -42,7 +42,7 @@
   {
     "name": "Default execution ignores TS type errors natively",
     "args": [
-      "--module",
+      
       "run_bypass.ts"
     ],
     "expect": {

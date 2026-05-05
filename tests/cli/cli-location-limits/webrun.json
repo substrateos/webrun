@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "storage": { ".": { "access": "read" } }
+  },
+  "locations": {
+    "./slow.ts": {
+      "limits": { "timeoutMillis": 500 }
+    }
+  }
+}

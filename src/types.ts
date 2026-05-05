@@ -2,39 +2,56 @@
 // 1. TYPES & DOMAIN MODELS
 // =========================================================
 
-/** User-facing configuration loaded from webrun.json or package.json#webrun. */
-export interface WebrunConfig {
+/** A localized request for capabilities during the OCap evaluation chain. */
+export interface CapabilityRequest {
+    network: string[];
+    storage: { path: string; access: "read" | "write" }[];
+    env: string[];
+    bindings: string[];
+    import: string[];
+    gpu: boolean;
+    webrtc: boolean;
+}
+
+export type WebrunStorageAccess =
+    | { access: "read"; airgap?: boolean }
+    | { access: "write"; airgap?: boolean }
+    | { access: "delegate"; ceiling: WebrunPermissions }
+    | { access: "none" };
+
+export interface WebrunPermissions {
+    /** Maps relative directory paths to read/write access levels. */
+    storage?: Record<string, WebrunStorageAccess>;
+    /** Allowed outbound network domains (["*"] for unrestricted). */
+    network?: string[];
+    /** Host environment variable names to inject into the sandbox. */
+    env?: string[];
+    /** Named bindings the guest is permitted to call. */
+    bindings?: string[];
+    /** Whether to grant WebGPU access. */
+    gpu?: boolean;
+    /** Whether to enable the WebRTC polyfill (CLI only; browsers have native WebRTC). */
+    webrtc?: boolean;
+    /**
+     * Allowed remote hosts for ES module imports (["*"] for unrestricted).
+     * Maps to Deno's --allow-import flag.
+     * Default trusted hosts (deno.land, jsr.io, esm.sh, etc.) are always included.
+     */
+    import?: string[];
+    /** Explicit capability delegations to specific subdirectories. */
+    delegate?: Record<string, WebrunPermissions>;
+}
+
+/** Scoped configuration applicable to both the root config and individual locations. */
+export interface WebrunLocationConfig {
+    /** Permission boundaries for the sandbox. */
+    permissions?: WebrunPermissions;
     /** Resource constraints applied to the guest process. */
-    limits?: { timeoutMillis?: number, memoryMB?: number };
-    /** Declarative permission boundaries for the sandbox. */
-    permissions?: {
-        /** Maps relative directory paths to read/write access levels. */
-        storage?: Record<string, { access: "read" | "write" }>;
-        /** Allowed outbound network domains (["*"] for unrestricted). */
-        network?: string[];
-        /** Host environment variable names to inject into the sandbox. */
-        env?: string[];
-        /** Named bindings the guest is permitted to call. */
-        bindings?: string[];
-        /** Whether to grant WebGPU access. */
-        gpu?: boolean;
-        /** Whether to enable the WebRTC polyfill (CLI only; browsers have native WebRTC). */
-        webrtc?: boolean;
-        /**
-         * Allowed remote hosts for ES module imports (["*"] for unrestricted).
-         * Maps to Deno's --allow-import flag.
-         * Default trusted hosts (deno.land, jsr.io, esm.sh, etc.) are always included.
-         */
-        imports?: string[];
-    };
+    limits?: { timeoutMillis?: number; memoryMB?: number };
     /** Host-side binding service declarations (process or module). */
     bindings?: Record<string, any>;
-    /** Path to an import map file for module resolution. */
+    /** Path to an import map file for module resolution (relative to webrun.json). */
     importMap?: string;
-    /** Default execution entrypoint for --module mode. */
-    module?: string;
-    /** Default execution entrypoint for --serve mode. */
-    serve?: string;
     /** Unstable feature flags. */
     experimental?: {
         /**
@@ -45,6 +62,18 @@ export interface WebrunConfig {
          */
         opfs?: { origin: "git" | "path" };
     };
+}
+
+/** User-facing configuration loaded from webrun.json or package.json#webrun. */
+export interface WebrunConfig extends WebrunLocationConfig {
+    /** Short name aliases mapping to paths or URLs (e.g. `"default": "./main.ts"`). */
+    aliases?: Record<string, string>;
+    /** Path-keyed overrides that narrow the root config for specific entrypoints. */
+    locations?: Record<string, WebrunLocationConfig>;
+    /** Default execution entrypoint for --serve mode. */
+    serve?: string;
+    /** Paths that, if accessed, strictly forbid the request of other capabilities (e.g. network) to enforce an airgap. */
+    isolate?: string[];
 }
 
 /** Landlock policy for Linux self-sandboxing (serialized into the sandbox payload). */
@@ -67,7 +96,8 @@ export interface LandlockPolicy {
 export interface CommandInvocation {
     action: "run" | "test" | "eval" | "check-only" | "serve";
     targetScriptPath: string;
-    targetModule?: string;
+    /** The key of the matched location alias, if any. */
+    resolvedLocationKey?: string;
     evalCode?: string;
     sandboxArgs: string[];
     injectedArgsObj: Record<string, any>;
@@ -78,6 +108,16 @@ export interface CommandInvocation {
     filterPattern?: string;
     /** Additional test module paths for multi-module --test mode. */
     additionalTargets?: string[];
+    /**
+     * Maps each script path to its original location URL.
+     * Used to provide per-test ctx.location.
+     */
+    scriptLocations?: Record<string, string>;
+    /**
+     * Maps each location URL to its HTML source (deduplicated).
+     * Used to provide per-test ctx.srcdoc.
+     */
+    srcdocs?: Record<string, string>;
 }
 
 /**
@@ -104,6 +144,8 @@ interface CommonPayload {
     /** Port of the host-side mux proxy (null if no process bindings). */
     muxPort?: number | null;
     config?: WebrunConfig;
+    /** Location-specific permissions that narrow the global config. */
+    locationPermissions?: WebrunPermissions;
     configDir?: string;
     /**
      * Absolute path to the runner's ephemeral temp directory.
@@ -115,6 +157,16 @@ interface CommonPayload {
     landlockPolicy?: LandlockPolicy;
     /** Bearer token for the host-side spawn server (ctx.webrun() IPC). */
     spawnToken?: string;
+    /**
+     * Maps each script path to its original location URL.
+     * Used to provide per-test ctx.location.
+     */
+    scriptLocations?: Record<string, string>;
+    /**
+     * Maps each location URL to its HTML source (deduplicated).
+     * Used to provide per-test ctx.srcdoc.
+     */
+    srcdocs?: Record<string, string>;
     /** Self-test marker (internal use). */
     isSelfCheck?: boolean;
 }

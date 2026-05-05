@@ -1,11 +1,11 @@
 [
   {
     "name": "ctx.makeTempDir W3C Lifecycle",
-    "args": ["--module", "src/temp_dir.js"],
+    "args": ["src/temp_dir.js"],
     "expect": {
       "exit_code": 0,
       "stdout": [{"contains": "SUCCESS"}],
-      "stderr": [{"absent": "[Execution Error]"}]
+      "stderr": [{"absent": "Uncaught"}]
     }
   }
 ]

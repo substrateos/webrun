@@ -2,7 +2,7 @@
   {
     "name": "Sandbox I/O Integrity (The Breakout Attempt)",
     "args": [
-      "--module",
+      
       "src/breakout.js"
     ],
     "expect": {
