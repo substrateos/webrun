@@ -227,7 +227,22 @@ if [[ "$1" == "--self-test" ]]; then
     DENO_SCRIPT=$(realpath "$DENO_SCRIPT.js")
     awk '/^__DATA__/ {flag=1; next} /^__TEST_DATA__/ {flag=0} flag { if ($0 !~ /^\/\/# sourceMappingURL=/) print }' "$SOURCE" > "$DENO_SCRIPT"
     
-    WEBRUN_BIN="$WEBRUN_BIN" "$DENO_BIN" run --allow-read --allow-write --deny-write="$SCRIPT_DIR" --allow-run --allow-net=127.0.0.1,0.0.0.0 --allow-import --allow-env --allow-sys=networkInterfaces --no-lock --config "$SCRIPT_DIR/deno.json" --no-check --unstable-worker-options --unstable-net $COVERAGE_FLAG "$DENO_SCRIPT" --self-test "$DENO_TEST_SCRIPT" "${FILTER_ARGS[@]}"
+    WEBRUN_BIN="$WEBRUN_BIN" "$DENO_BIN" run \
+      --no-prompt \
+      --allow-read \
+      --allow-write --deny-write="$SCRIPT_DIR" \
+      --allow-run \
+      --allow-net=127.0.0.1,0.0.0.0 \
+      --allow-import \
+      --allow-env \
+      --allow-sys=networkInterfaces \
+      --no-lock \
+      --config "$SCRIPT_DIR/deno.json" \
+      --no-check \
+      --unstable-worker-options \
+      --unstable-net \
+      $COVERAGE_FLAG \
+      "$DENO_SCRIPT" --self-test "$DENO_TEST_SCRIPT" "${FILTER_ARGS[@]}"
     EXIT_CODE=$?
     rm -f "$DENO_TEST_SCRIPT"
     rm -f "$DENO_SCRIPT"
@@ -236,7 +251,22 @@ if [[ "$1" == "--self-test" ]]; then
     fi
     exit $EXIT_CODE
   else
-    "$DENO_BIN" run --allow-read --allow-write --deny-write="$SCRIPT_DIR" --allow-run --allow-net=127.0.0.1,0.0.0.0 --allow-import --allow-env --allow-sys=networkInterfaces --no-lock --config "$SCRIPT_DIR/deno.json" --no-check --unstable-worker-options --unstable-net $COVERAGE_FLAG "$SCRIPT_DIR/webrun.ts" --self-test "$SCRIPT_DIR/webrun.test.ts" "${FILTER_ARGS[@]}"
+    "$DENO_BIN" run \
+      --no-prompt \
+      --allow-read \
+      --allow-write --deny-write="$SCRIPT_DIR" \
+      --allow-run \
+      --allow-net=127.0.0.1,0.0.0.0 \
+      --allow-import \
+      --allow-env \
+      --allow-sys=networkInterfaces \
+      --no-lock \
+      --config "$SCRIPT_DIR/deno.json" \
+      --no-check \
+      --unstable-worker-options \
+      --unstable-net \
+      $COVERAGE_FLAG \
+      "$SCRIPT_DIR/webrun.ts" --self-test "$SCRIPT_DIR/webrun.test.ts" "${FILTER_ARGS[@]}"
     EXIT_CODE=$?
     if [ -n "$COVERAGE_FLAG" ]; then
       "$DENO_BIN" coverage cov_profile
@@ -251,10 +281,24 @@ if grep -q "^__DATA__" "$SOURCE"; then
   DENO_SCRIPT=$(realpath "$DENO_SCRIPT.js")
   awk '/^__DATA__/ {flag=1; next} /^__TEST_DATA__/ {flag=0} flag { if ($0 !~ /^\/\/# sourceMappingURL=/) print }' "$SOURCE" > "$DENO_SCRIPT"
   
-  WEBRUN_BIN="$WEBRUN_BIN" "$DENO_BIN" run -A --no-check --unstable-worker-options --unstable-net "$DENO_SCRIPT" "$@"
+  WEBRUN_BIN="$WEBRUN_BIN" "$DENO_BIN" run \
+    -A \
+    --no-check \
+    --no-prompt \
+    --unstable-worker-options \
+    --unstable-net \
+    "$DENO_SCRIPT" "$@"
   EXIT_CODE=$?
   rm -f "$DENO_SCRIPT"
   exit $EXIT_CODE
 else
-  exec "$DENO_BIN" run -A --config "$SCRIPT_DIR/deno.json" --no-check --quiet --unstable-worker-options --unstable-net "$SCRIPT_DIR/webrun.ts" "$@"
+  exec "$DENO_BIN" run \
+    -A \
+    --config "$SCRIPT_DIR/deno.json" \
+    --no-check \
+    --no-prompt \
+    --quiet \
+    --unstable-worker-options \
+    --unstable-net \
+    "$SCRIPT_DIR/webrun.ts" "$@"
 fi
