@@ -52,13 +52,19 @@ export default async function() {
     }
 }`);
 
-        const wcmd = new sys.Command(WEBRUN_BIN, { args: ["write.js"], cwd: tmpApi, stdout: "null", stderr: "inherit" });
+        const wcmd = new sys.Command(WEBRUN_BIN, { args: ["write.js"], cwd: tmpApi, stdout: "null", stderr: "piped" });
         const wout = await wcmd.output();
-        if (wout.code !== 0) throw new Error("Write failed");
+        if (wout.code !== 0) {
+            const errOut = new TextDecoder().decode(wout.stderr);
+            throw new Error(`Write failed (code ${wout.code}): ${errOut}`);
+        }
 
-        const rcmd = new sys.Command(WEBRUN_BIN, { args: ["read.js"], cwd: tmpApi, stdout: "null", stderr: "inherit" });
+        const rcmd = new sys.Command(WEBRUN_BIN, { args: ["read.js"], cwd: tmpApi, stdout: "null", stderr: "piped" });
         const rout = await rcmd.output();
-        if (rout.code !== 0) throw new Error("Read failed - OPFS did not persist");
+        if (rout.code !== 0) {
+            const errOut = new TextDecoder().decode(rout.stderr);
+            throw new Error(`Read failed (code ${rout.code}) - OPFS did not persist: ${errOut}`);
+        }
 
         const badApi = sys.realPathSync(sys.makeTempDirSync());
         sys.writeTextFileSync(`${badApi}/webrun.json`, JSON.stringify({
