@@ -7,18 +7,18 @@ ARCH=$(uname -m)
 if [ "$OS" = "Darwin" ]; then
   if [ "$ARCH" = "arm64" ]; then
     DENO_TARGET="aarch64-apple-darwin"
-    EXPECTED_SHA="316876e652fe839eec6e4223fb4e685bc8591897ef41889a3f614540e2ba7cda"
+    EXPECTED_SHA="aeb5825f83b4a9cd7f9355a1c4ddd666205dacf76ccb7b98c2b10e066bc9e4bb"
   elif [ "$ARCH" = "x86_64" ]; then
     DENO_TARGET="x86_64-apple-darwin"
-    EXPECTED_SHA="4d263ee0eef2beb06b9bc6fe997f849d8aba5fd14465da7fcd12e5dc4850cc03"
+    EXPECTED_SHA="c89149513bf8e82ab5b351dac544f8c0cada90753bd2f576f46325fb67997ae1"
   fi
 elif [ "$OS" = "Linux" ]; then
   if [ "$ARCH" = "aarch64" ]; then
     DENO_TARGET="aarch64-unknown-linux-gnu"
-    EXPECTED_SHA="abf6b16e8fbd8aa3907bc9d56630a53a256feb31c2dafa80a92129da17308b81"
+    EXPECTED_SHA="b815c919452b5993a7c22df018a88c2f706eea6b5e0aa7802b2b0709edde01e8"
   elif [ "$ARCH" = "x86_64" ]; then
     DENO_TARGET="x86_64-unknown-linux-gnu"
-    EXPECTED_SHA="f930789c59335e374ebe28671f3b426c2e40e5328de0edab7002185f81fdf857"
+    EXPECTED_SHA="3287efef53606966469cb6a02781327be22b908959397f976e2996dc1b64ae0f"
   fi
 fi
 
@@ -37,7 +37,7 @@ SCRIPT_DIR="$( cd -P "$( dirname "$SOURCE" )" >/dev/null 2>&1 && pwd )"
 export WEBRUN_BIN="$SCRIPT_DIR/$(basename "$SOURCE")"
 export WEBRUN_VERSION="dev"
 
-DENO_VERSION="v2.7.6"
+DENO_VERSION="v2.7.14"
 
 if [ -n "$HOME" ] && [ -d "$HOME" ]; then
   CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/webrun"
@@ -54,6 +54,7 @@ DENO_DIR="$WEBRUN_DENO_DIR"
 
 # Do not let deno check for updates. It's slow and we don't need it.
 export DENO_NO_UPDATE_CHECK=1
+# --- end preamble ---
 
 if [ ! -f "$DENO_BIN" ]; then
   echo "Downloading Deno ${DENO_VERSION} for $DENO_TARGET..." >&2

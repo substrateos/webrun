@@ -3,10 +3,13 @@
 # Suppress Deno's background update check for all invocations.
 export DENO_NO_UPDATE_CHECK := 1
 
-# Resolve the project's pinned Deno binary (bootstrapped by ./webrun).
-DENO_BIN := $(shell echo ~/.cache/webrun/deno/deno-*/deno)
+# Resolve the project's pinned Deno binary deterministically.
+# Evaluates the webrun launcher up to the "end preamble" sentinel (no side
+# effects) to compute the exact version+SHA path.
+HASH := \#
+DENO_BIN := $(shell bash -c 'eval "$$(sed -n "1,/^$(HASH) --- end preamble ---/p" webrun)"; echo "$$DENO_BIN"')
 
-# Ensure Deno is available (bootstrap it via ./webrun if needed).
+# Bootstrap the Deno binary if it hasn't been downloaded yet.
 $(DENO_BIN):
 	@./webrun --version > /dev/null
 
