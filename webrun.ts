@@ -119,7 +119,14 @@ function setupUdpRelay(): { port1: MessagePort; cleanup: () => void } {
 const isWorker = typeof (globalThis as any).WorkerGlobalScope !== 'undefined' && self instanceof (globalThis as any).WorkerGlobalScope;
 
 if (!isWorker) {
-    if (Deno.args.includes("--internal-webrun-guest")) {
+    if (Deno.args[0] === "--internal-webrun-landlock") {
+        const policyBase64 = Deno.args[1];
+        const cmdExe = Deno.args[2];
+        const cmdArgs = Deno.args.slice(3);
+        const policy = JSON.parse(atob(policyBase64));
+        const { bootstrapLandlockAndExec } = await import("./src/landlock.ts");
+        bootstrapLandlockAndExec(policy, cmdExe, cmdArgs);
+    } else if (Deno.args.includes("--internal-webrun-guest")) {
         const payloadIndex = Deno.args.indexOf("--internal-webrun-guest");
         const payloadPath = Deno.args[payloadIndex + 1];
         const payloadData = JSON.parse(Deno.readTextFileSync(payloadPath));

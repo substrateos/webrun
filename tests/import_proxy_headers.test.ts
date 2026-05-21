@@ -4,7 +4,7 @@
 // and hop-by-hop headers to prevent double-decompression when proxying
 // gzip-encoded upstream responses.
 
-import { serializeProxyResponseHeaders } from "../src/import_proxy.ts";
+import { serializeProxyResponseHeaders } from "../src/import_proxy_headers.ts";
 
 // =========================================================
 // Table-driven tests for header filtering

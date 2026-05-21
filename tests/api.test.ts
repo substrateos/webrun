@@ -2,7 +2,8 @@ import { dir } from "webrun/ctx";
 import { discoverCases, runBatchCase, runSignalCase } from "./case_runner.ts";
 
 export async function testApi(t: any) {
-    const apiDir = await dir.getDirectoryHandle("api");
+    const testsDir = await dir.getDirectoryHandle("tests");
+    const apiDir = await testsDir.getDirectoryHandle("api");
     const cases = await discoverCases(apiDir);
     if (cases.length === 0) throw new Error("No API test cases discovered");
 

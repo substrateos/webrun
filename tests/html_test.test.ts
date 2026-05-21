@@ -348,13 +348,13 @@ const networkPermCases: Array<{
     },
     {
         name: "allows remote HTML when domain is explicitly listed",
-        target: "https://trusted.example.com/test.html",
-        allowedDomains: ["trusted.example.com"],
+        target: "https://127.0.0.1:19999/test.html",
+        allowedDomains: ["127.0.0.1"],
         shouldThrow: false,  // Will fail on fetch (no server), but won't throw permission error
     },
     {
         name: "allows remote HTML when wildcard * is in permissions.network",
-        target: "https://anything.example.com/test.html",
+        target: "https://127.0.0.1:19999/test.html",
         allowedDomains: ["*"],
         shouldThrow: false,  // Will fail on fetch, but won't throw permission error
     },

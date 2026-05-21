@@ -7,7 +7,7 @@
 //
 // Run via: ./webrun --self-test=LocationConfig
 
-import { resolveLocationConfig, applyLocationOverrides } from "../src/host/mod.ts";
+import { resolveLocationConfig, applyLocationOverrides } from "../src/host/location_config.ts";
 import type { WebrunConfig, WebrunLocationConfig } from "../src/types.ts";
 
 // =========================================================

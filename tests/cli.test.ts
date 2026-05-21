@@ -2,7 +2,8 @@ import { dir } from "webrun/ctx";
 import { discoverCases, runBatchCase } from "./case_runner.ts";
 
 export async function testCli(t: any) {
-    const cliDir = await dir.getDirectoryHandle("cli");
+    const testsDir = await dir.getDirectoryHandle("tests");
+    const cliDir = await testsDir.getDirectoryHandle("cli");
     const cases = await discoverCases(cliDir);
     if (cases.length === 0) throw new Error("No CLI test cases discovered");
 

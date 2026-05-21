@@ -1,4 +1,4 @@
-.PHONY: test test-external build-webrtc check-webrtc
+.PHONY: test test-suite build-webrtc check-webrtc
 
 # Suppress Deno's background update check for all invocations.
 export DENO_NO_UPDATE_CHECK := 1
@@ -18,16 +18,24 @@ src/internal/webrtc/node_modules: src/internal/webrtc/deno.json $(DENO_BIN)
 	cd src/internal/webrtc && $(abspath $(DENO_BIN)) install
 	@touch src/internal/webrtc/node_modules
 
-# Run all tests: self-test suite + external suite + webrtc bundle reproducibility check.
+# Which webrun binary the test suite exercises. Exported so Deno sees it.
+export WEBRUN_BIN ?= $(CURDIR)/webrun
+
+# Run self-test + external tests against $(WEBRUN_BIN).
+test-suite: $(DENO_BIN)
+	$(WEBRUN_BIN) --test tests/webrun.test.ts
+	$(DENO_BIN) test --no-lock -A tests/external/
+
+# Run all tests: unbundled suite + bundled suite + webrtc bundle reproducibility check.
 test: check-webrtc
 	$(DENO_BIN) cache --config deno.json webrun.ts
-	./webrun --self-test
-	$(MAKE) test-external
-
-# Run the external test suite (tests requiring raw Deno: TTY, git, raw network, bundling).
-# These run outside the webrun sandbox using the project's pinned Deno binary.
-test-external: $(DENO_BIN)
-	$(DENO_BIN) test --no-lock -A tests/external/
+	@echo "=== Unbundled ==="
+	$(MAKE) test-suite
+	@echo "=== Bundled ==="
+	./webrun --self-bundle > webrun_bundled
+	chmod +x webrun_bundled
+	$(MAKE) test-suite WEBRUN_BIN=$(CURDIR)/webrun_bundled
+	rm webrun_bundled
 
 # Regenerate src/internal/webrtc/bundle.js and verify it matches what's committed.
 check-webrtc: src/internal/webrtc/node_modules $(DENO_BIN)

@@ -4,11 +4,11 @@ import { computeOpfsPathId } from "../src/host/opfs.ts";
 import { evaluateEnclavePolicy } from "../src/policy.ts";
 
 // Mock JailRuntime for pure-function testing (no I/O).
-function mockSys(overrides: Partial<{ execPath: string; realPathSync: (p: string) => string }> = {}) {
+function mockSys(overrides: Partial<{ execPath: string; realPathSync: (p: string | URL) => string }> = {}) {
     return {
         execPath: () => overrides.execPath || "/usr/bin/deno",
         Command: class {} as any,
-        realPathSync: overrides.realPathSync || ((p: string) => p),
+        realPathSync: overrides.realPathSync || ((p: string | URL) => String(p)),
     };
 }
 
@@ -206,7 +206,7 @@ export async function testJailDispatch(t: any) {
         {
             name: "paths are canonicalized through realPathSync",
             policy: mockPolicy({ allowedReadPaths: ["/tmp/symlinked"] }),
-            sysOverrides: { realPathSync: (p: string) => p === "/tmp/symlinked" ? "/real/path" : p },
+            sysOverrides: { realPathSync: (p: string | URL) => p === "/tmp/symlinked" ? "/real/path" : String(p) },
             expect: (p: any) => p.read_paths.includes("/real/path") && !p.read_paths.includes("/tmp/symlinked"),
         },
     ];
@@ -376,13 +376,13 @@ export async function testHomePathContainment(t: any) {
                 readTextFileSync: () => "",
                 statSync: () => ({ isFile: true }),
                 writeTextFileSync: () => {},
-                realPathSync: (p: string) => p,
+                realPathSync: (p: string | URL) => String(p),
             } as any;
 
             let threw = false;
             try {
                 evaluateEnclavePolicy(
-                    mockSys, tc.configDirs, [], "/project", "/project", "/tmp/isolated"
+                    mockSys, tc.configDirs as any, [], "/project", "/project", "/tmp/isolated"
                 );
             } catch (e: any) {
                 if (e.name === "SecurityViolationError") {
@@ -409,7 +409,7 @@ export async function testHomePathContainment(t: any) {
             readTextFileSync: () => "",
             statSync: () => ({ isFile: true }),
             writeTextFileSync: () => {},
-            realPathSync: (p: string) => p,
+            realPathSync: (p: string | URL) => String(p),
         } as any;
 
         const policy = evaluateEnclavePolicy(

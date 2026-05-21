@@ -2,7 +2,8 @@ import { dir } from "webrun/ctx";
 import { discoverCases, runBatchCase } from "./case_runner.ts";
 
 export async function testPolicy(t: any) {
-    const policyDir = await dir.getDirectoryHandle("policy");
+    const testsDir = await dir.getDirectoryHandle("tests");
+    const policyDir = await testsDir.getDirectoryHandle("policy");
     const cases = await discoverCases(policyDir);
     if (cases.length === 0) throw new Error("No Policy test cases discovered");
 

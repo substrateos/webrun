@@ -110,6 +110,10 @@ export function resolveCapabilities(
         paths.opfsTmp,
     ];
 
+    if (sys.env?.get("WEBRUN_BIN")) {
+        readPaths.push(canon(sys.env.get("WEBRUN_BIN")!));
+    }
+
     // Grant read access to the surrounding source directory when running
     // from unbundled .ts source (needs to dynamically import sibling files).
     if (paths.isSourceMode) {
@@ -139,6 +143,9 @@ export function resolveCapabilities(
     // via the dynamic linker. System library paths must be executable for any
     // binary (including exec'd children) to load its dependencies.
     const execPaths = [canon(sys.execPath())];
+    if (sys.env?.get("WEBRUN_BIN")) {
+        execPaths.push(canon(sys.env.get("WEBRUN_BIN")!));
+    }
     if (isLinux) {
         execPaths.push("/usr/lib", "/usr/lib64", "/lib", "/lib64");
     }
@@ -564,7 +571,7 @@ export interface RuntimeArgsInput {
 
 /**
  * Builds the complete Deno CLI argument vector for a sandbox invocation.
- * Pure function — no I/O, no side effects, no isSelfTest branching.
+ * Pure function — no I/O, no side effects.
  * Permissions are derived entirely from the ResolvedCapabilities.
  */
 export function buildRuntimeArgs(input: RuntimeArgsInput): string[] {

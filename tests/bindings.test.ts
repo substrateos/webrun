@@ -2,7 +2,8 @@ import { dir } from "webrun/ctx";
 import { discoverCases, runBatchCase } from "./case_runner.ts";
 
 export async function testBindings(t: any) {
-    const bindingsDir = await dir.getDirectoryHandle("bindings");
+    const testsDir = await dir.getDirectoryHandle("tests");
+    const bindingsDir = await testsDir.getDirectoryHandle("bindings");
     const cases = await discoverCases(bindingsDir);
     if (cases.length === 0) throw new Error("No bindings test cases discovered");
 

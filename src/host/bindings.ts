@@ -92,15 +92,33 @@ export function setupBindingProcesses(sys: HostRuntime, config: WebrunConfig, cw
                         ...processConfig.command.slice(1)
                     ];
                 } else if (sys.build.os === "linux") {
-                    // Linux: Landlock wrapper applies OS-level restrictions
-                    // then spawns the actual binding command. Landlock restrictions
-                    // are inherited by all child processes regardless of runtime.
+                    // Linux: webrun itself acts as the Landlock bootstrapper before execvp.
                     const landlockPolicy = toLandlockPolicy(bindingCaps);
-                    const wrapperScript = generateLandlockWrapper(landlockPolicy, resolvedCmdExe, processConfig.command.slice(1));
-                    const wrapperPath = resolve(bindingSdksTmp, `${name}_landlock.ts`);
-                    sys.writeTextFileSync(wrapperPath, wrapperScript);
+                    const policyBase64 = btoa(JSON.stringify(landlockPolicy));
                     runCmd = sys.execPath();
-                    runArgs = ["run", "--allow-all", "--no-check", wrapperPath];
+                    
+                    const webrunDir = tryRealpathSync(sys, dirname(webrunEntryPath)) || dirname(webrunEntryPath);
+                    const bootstrapperReads = Array.from(new Set([
+                        webrunEntryPath,
+                        webrunDir,
+                        resolve(webrunDir, "deno.json"),
+                        resolve(webrunDir, "deno.jsonc"),
+                        ...landlockPolicy.read_paths,
+                        ...landlockPolicy.write_paths,
+                        ...landlockPolicy.exec_paths
+                    ])).filter(Boolean);
+
+                    runArgs = [
+                        "run",
+                        "--allow-ffi", "--unstable-ffi",
+                        `--allow-read=${bootstrapperReads.join(",")}`,
+                        "--no-prompt",
+                        webrunEntryPath,
+                        "--internal-webrun-landlock", 
+                        policyBase64, 
+                        resolvedCmdExe, 
+                        ...processConfig.command.slice(1)
+                    ];
                 }
 
                 const logPath = resolve(logsDir, `${name}.log`);
@@ -140,6 +158,13 @@ export function setupBindingProcesses(sys: HostRuntime, config: WebrunConfig, cw
 
                         // Ignore expected process disruption codes that occur when WebRun naturally terminates the parent JS context
                         // 130: SIGINT, 137: SIGKILL, 141: SIGPIPE, 143: SIGTERM 
+                        try {
+                            const text = sys.readTextFileSync(logPath);
+                            console.error("\n--- CRASH LOG ---");
+                            console.error(text);
+                            console.error("-----------------\n");
+                        } catch (_) {}
+
                         const expectedTerminationCodes = [130, 137, 141, 143];
                         if (!expectedTerminationCodes.includes(status.code)) {
                             const exitColor = status.code === 0 ? '\x1b[32m' : '\x1b[31m';
@@ -287,62 +312,6 @@ export function computeBindingEnv(
         for (const k of declaredEnv) baseEnv[k] = hostEnv[k] || "";
         return baseEnv;
     }
-
     // No permissions.env declared — return only the sandbox base set.
     return baseEnv;
 }
-/**
- * Generates a Deno script that applies Landlock restrictions then exec's
- * into the actual binding command. Landlock restrictions survive exec
- * (they're kernel-level on the thread), so the binding process inherits
- * them with no extra process layer.
- *
- * The wrapper runs with --allow-all (it needs FFI for Landlock syscalls
- * and execvp), but immediately restricts the kernel-level sandbox before
- * replacing itself with the binding.
- */
-function generateLandlockWrapper(
-    policy: import("../types.ts").LandlockPolicy,
-    cmdExe: string,
-    cmdArgs: string[],
-): string {
-    const policyJson = JSON.stringify(policy);
-    const argv = [cmdExe, ...cmdArgs];
-    const argvJson = JSON.stringify(argv);
-
-    return `import { applyLandlockJail } from "${new URL("../landlock.ts", import.meta.url).href}";
-
-const policy = ${policyJson};
-applyLandlockJail(policy);
-
-// Landlock is now active. exec into the binding — restrictions survive exec.
-const argv = ${argvJson};
-
-const libc = Deno.dlopen("libc.so.6", {
-    execvp: { parameters: ["pointer", "pointer"], result: "i32" },
-});
-
-const encode = (s: string): Uint8Array => new TextEncoder().encode(s + "\\0");
-const file = encode(argv[0]);
-
-// Build char *argv[] — array of pointers to null-terminated strings, NULL-terminated.
-const ptrs = new BigUint64Array(argv.length + 1);
-const buffers: Uint8Array[] = [];
-for (let i = 0; i < argv.length; i++) {
-    const buf = new Uint8Array(encode(argv[i]).buffer);
-    buffers.push(buf);
-    ptrs[i] = BigInt(Deno.UnsafePointer.value(Deno.UnsafePointer.of(buf)!));
-}
-ptrs[argv.length] = 0n; // NULL terminator
-
-libc.symbols.execvp(
-    Deno.UnsafePointer.of(new Uint8Array(file.buffer)),
-    Deno.UnsafePointer.of(new Uint8Array(ptrs.buffer)),
-);
-
-// If we get here, execvp failed.
-console.error("[webrun] Fatal: execvp failed for binding:", argv[0]);
-Deno.exit(127);
-`;
-}
-

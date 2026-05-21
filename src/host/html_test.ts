@@ -9,7 +9,11 @@
 // is async and handles file I/O and remote fetching.
 
 import { resolve, dirname } from "https://deno.land/std@0.224.0/path/mod.ts";
-import { pathToFileURL } from "node:url";
+/** Web-standard replacement for node:url's pathToFileURL.
+ *  Avoids a node: import that the sandbox sinkhole blocks in bundled tests. */
+function pathToFileURL(path: string): URL {
+    return new URL("file://" + encodeURI(path).replace(/#/g, "%23").replace(/\?/g, "%3F"));
+}
 import { rewriteImportMapPathsToAbsolute, mergeImportMaps } from "../config.ts";
 import type { CommandInvocation, HostRuntime } from "../types.ts";
 

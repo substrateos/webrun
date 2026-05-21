@@ -162,7 +162,7 @@ if [[ "$1" == "--self-bundle" ]]; then
     exit 1
   fi
   SRC_DIR="$SCRIPT_DIR"
-  for file in "webrun" "webrun.ts" "webrun.test.ts" "README.md" "LICENSE" "deno.json" "deno.lock"; do
+  for file in "webrun" "webrun.ts" "README.md" "LICENSE" "deno.json" "deno.lock"; do
     if [ ! -f "$SRC_DIR/$file" ]; then
       echo "Error: Missing required file $SRC_DIR/$file for bundling." >&2
       exit 1
@@ -175,8 +175,6 @@ if [[ "$1" == "--self-bundle" ]]; then
   awk '/^__DATA__/ {exit} {print}' "$SRC_DIR/webrun"
   echo "__DATA__"
   (cd "$SRC_DIR" && "$DENO_BIN" bundle --config deno.json --external=webrun/ctx --sourcemap=inline webrun.ts 2>/dev/null) || cat "$SRC_DIR/webrun.ts"
-  echo "__TEST_DATA__"
-  (cd "$SRC_DIR" && "$DENO_BIN" bundle --config deno.json --external=webrun/ctx --sourcemap=inline webrun.test.ts 2>/dev/null) || cat "$SRC_DIR/webrun.test.ts"
   echo "__README_DATA__"
   cat "$SRC_DIR/README.md"
   echo "__LICENSE_DATA__"
@@ -195,101 +193,38 @@ if [[ "$1" == "--self-vendor" ]]; then
   fi
   SRC_DIR="$SCRIPT_DIR"
   echo "Vendoring dependencies based on deno.json..."
-  "$DENO_BIN" cache --config "$SRC_DIR/deno.json" "$SRC_DIR/webrun.ts" "$SRC_DIR/webrun.test.ts"
+  "$DENO_BIN" cache --config "$SRC_DIR/deno.json" "$SRC_DIR/webrun.ts"
   exit $?
 fi
 
-if [[ "$1" == "--self-test" ]]; then
-  shift
-  FILTER_ARGS=()
-  COVERAGE_FLAG=""
-  for arg in "$@"; do
-    if [[ "$arg" == "--coverage" ]]; then
-      COVERAGE_FLAG="--coverage=cov_profile"
-      rm -rf cov_profile
-    else
-      if [[ "$arg" != "--filter" && "${#FILTER_ARGS[@]}" -eq 0 && "$arg" != -* ]]; then
-        FILTER_ARGS=("--filter" "$arg")
-      else
-        FILTER_ARGS+=("$arg")
-      fi
-    fi
-  done
-
-  if grep -q "^__TEST_DATA__" "$SOURCE"; then
-    DENO_TEST_SCRIPT=$(mktemp)
-    mv "$DENO_TEST_SCRIPT" "$DENO_TEST_SCRIPT.js"
-    DENO_TEST_SCRIPT=$(realpath "$DENO_TEST_SCRIPT.js")
-    awk '/^__TEST_DATA__/ {flag=1; next} /^__README_DATA__/ {flag=0} flag { if ($0 !~ /^\/\/# sourceMappingURL=/) print }' "$SOURCE" > "$DENO_TEST_SCRIPT"
-
-    # Extract the main deno script as well
-    DENO_SCRIPT=$(mktemp)
-    mv "$DENO_SCRIPT" "$DENO_SCRIPT.js"
-    DENO_SCRIPT=$(realpath "$DENO_SCRIPT.js")
-    awk '/^__DATA__/ {flag=1; next} /^__TEST_DATA__/ {flag=0} flag { if ($0 !~ /^\/\/# sourceMappingURL=/) print }' "$SOURCE" > "$DENO_SCRIPT"
-    
-    WEBRUN_BIN="$WEBRUN_BIN" "$DENO_BIN" run \
-      --no-prompt \
-      --allow-read \
-      --allow-write --deny-write="$SCRIPT_DIR" \
-      --allow-run \
-      --allow-net=127.0.0.1,0.0.0.0 \
-      --allow-import \
-      --allow-env \
-      --allow-sys=networkInterfaces \
-      --no-lock \
-      --config "$SCRIPT_DIR/deno.json" \
-      --no-check \
-      --unstable-worker-options \
-      --unstable-net \
-      $COVERAGE_FLAG \
-      "$DENO_SCRIPT" --self-test "$DENO_TEST_SCRIPT" "${FILTER_ARGS[@]}"
-    EXIT_CODE=$?
-    rm -f "$DENO_TEST_SCRIPT"
-    rm -f "$DENO_SCRIPT"
-    if [ -n "$COVERAGE_FLAG" ]; then
-      "$DENO_BIN" coverage cov_profile
-    fi
-    exit $EXIT_CODE
-  else
-    "$DENO_BIN" run \
-      --no-prompt \
-      --allow-read \
-      --allow-write --deny-write="$SCRIPT_DIR" \
-      --allow-run \
-      --allow-net=127.0.0.1,0.0.0.0 \
-      --allow-import \
-      --allow-env \
-      --allow-sys=networkInterfaces \
-      --no-lock \
-      --config "$SCRIPT_DIR/deno.json" \
-      --no-check \
-      --unstable-worker-options \
-      --unstable-net \
-      $COVERAGE_FLAG \
-      "$SCRIPT_DIR/webrun.ts" --self-test "$SCRIPT_DIR/webrun.test.ts" "${FILTER_ARGS[@]}"
-    EXIT_CODE=$?
-    if [ -n "$COVERAGE_FLAG" ]; then
-      "$DENO_BIN" coverage cov_profile
-    fi
-    exit $EXIT_CODE
-  fi
-fi
 
 if grep -q "^__DATA__" "$SOURCE"; then
   DENO_SCRIPT=$(mktemp)
   mv "$DENO_SCRIPT" "$DENO_SCRIPT.js"
   DENO_SCRIPT=$(realpath "$DENO_SCRIPT.js")
-  awk '/^__DATA__/ {flag=1; next} /^__TEST_DATA__/ {flag=0} flag { if ($0 !~ /^\/\/# sourceMappingURL=/) print }' "$SOURCE" > "$DENO_SCRIPT"
-  
+  awk '/^__DATA__/ {flag=1; next} /^__README_DATA__/ {flag=0} flag { if ($0 !~ /^\/\/# sourceMappingURL=/) print }' "$SOURCE" > "$DENO_SCRIPT"
+
+  forward_signal() { kill -"$1" $CHILD_PID 2>/dev/null; wait $CHILD_PID 2>/dev/null; }
+  trap 'forward_signal TERM' TERM
+  trap 'forward_signal INT' INT
+  trap 'forward_signal USR1' USR1
+  trap 'forward_signal USR2' USR2
   WEBRUN_BIN="$WEBRUN_BIN" "$DENO_BIN" run \
     -A \
     --no-check \
     --no-prompt \
     --unstable-worker-options \
     --unstable-net \
-    "$DENO_SCRIPT" "$@"
+    "$DENO_SCRIPT" "$@" &
+  CHILD_PID=$!
+  wait $CHILD_PID
   EXIT_CODE=$?
+  # If wait was interrupted by a signal, re-wait to get the child's real exit code.
+  if [ $EXIT_CODE -gt 128 ]; then
+    wait $CHILD_PID 2>/dev/null
+    EXIT_CODE=$?
+  fi
+  trap - TERM INT USR1 USR2
   rm -f "$DENO_SCRIPT"
   exit $EXIT_CODE
 else

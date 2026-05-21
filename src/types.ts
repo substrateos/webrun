@@ -167,8 +167,6 @@ interface CommonPayload {
      * Used to provide per-test ctx.srcdoc.
      */
     srcdocs?: Record<string, string>;
-    /** Self-test marker (internal use). */
-    isSelfCheck?: boolean;
 }
 
 /**

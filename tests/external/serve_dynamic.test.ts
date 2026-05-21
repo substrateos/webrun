@@ -26,8 +26,8 @@ export async function testServeDynamic(t: any) {
         const p = new sys.Command(WEBRUN_BIN, {
             args: ["--serve", `--bind=127.0.0.1:${port}`, "api.js"],
             cwd: tmpApi,
-            stdout: "inherit",
-            stderr: "inherit"
+            stdout: "piped",
+            stderr: "piped"
         }).spawn();
 
         for (let i = 0; i < 50; i++) {
@@ -41,6 +41,14 @@ export async function testServeDynamic(t: any) {
         try {
             const module = await import(`http://127.0.0.1:${port}`);
             if (module.answer !== 42 || module.calculate() !== 42) throw new Error("Incorrect result from fn: calculate.");
+        } catch (e) {
+            const [stdout, stderr] = await Promise.all([
+                new Response(p.stdout).text(),
+                new Response(p.stderr).text(),
+            ]);
+            console.error("--- subprocess stdout ---\n" + stdout);
+            console.error("--- subprocess stderr ---\n" + stderr);
+            throw e;
         } finally {
             try { p.kill("SIGTERM"); await p.status; } catch (_) {}
         }

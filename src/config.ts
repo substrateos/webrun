@@ -7,8 +7,6 @@ import { WebrunConfig, CommandInvocation, SandboxContextPayload, ConfigRuntime, 
 
 export interface ParsedArgs {
     isTest: boolean;
-    isSelfTest: boolean;
-    isSelfCheck: boolean;
     isEval: boolean;
     isCheckOnly: boolean;
     isNoCheck: boolean;
@@ -29,8 +27,6 @@ export function parseRawArguments(sysOrArgs: ConfigRuntime | string[], maybeArgs
     const args = Array.isArray(sysOrArgs) ? sysOrArgs : maybeArgs!;
     const rawArgs = [...args];
     let isTest = false;
-    let isSelfTest = false;
-    let isSelfCheck = false;
     let isEval = false;
     let isCheckOnly = false;
     let isNoCheck = false;
@@ -57,25 +53,6 @@ export function parseRawArguments(sysOrArgs: ConfigRuntime | string[], maybeArgs
         }
     }
 
-    const selfTestIdx = rawArgs.findIndex(a => a === "--self-test" || a.startsWith("--self-test="));
-    if (selfTestIdx !== -1) {
-        isTest = true;
-        const selfTestArg = rawArgs[selfTestIdx];
-        if (selfTestArg.startsWith("--self-test=")) {
-            filterPattern = selfTestArg.slice("--self-test=".length);
-        }
-        rawArgs.splice(selfTestIdx, 1);
-        isSelfTest = true;
-
-        // Resolve the test harness module relative to this package.
-        const selfUrl = new URL(import.meta.url);
-        const testHarnessUrl = selfUrl.pathname.endsWith(".ts")
-            ? new URL("../tests/webrun.test.ts", import.meta.url)
-            : new URL("./tests/webrun.test.ts", import.meta.url);
-        targetScriptPath = testHarnessUrl.protocol === "file:"
-            ? testHarnessUrl.pathname
-            : testHarnessUrl.href;
-    }
 
     const testIdx = rawArgs.findIndex(a => a === "--test" || a.startsWith("--test="));
     if (testIdx !== -1) {
@@ -163,8 +140,6 @@ export function parseRawArguments(sysOrArgs: ConfigRuntime | string[], maybeArgs
 
     return {
         isTest,
-        isSelfTest,
-        isSelfCheck,
         isEval,
         isCheckOnly,
         isNoCheck,
@@ -212,7 +187,7 @@ export function parseCommandInvocation(sysOrArgs: ConfigRuntime | string[], args
     let resolvedLocationKey: string | undefined;
     let additionalTargets: string[] | undefined;
     const isHelpOrVersion = ["help", "h", "version", "v"].some(key => parsed.injectedArgsObj[key]);
-    const isSelfTest = parsed.isSelfTest;
+
 
     const resolveLocation = (loc: string): { target: string, key?: string } => {
         if (config.aliases && config.aliases[loc]) {
@@ -224,7 +199,7 @@ export function parseCommandInvocation(sysOrArgs: ConfigRuntime | string[], args
         return { target: resolve(sys.cwd(), loc) };
     };
 
-    if (!parsed.isEval && !isSelfTest && !parsed.isSelfCheck) {
+    if (!parsed.isEval) {
         if (parsed.isServe && parsed.serveInterfaces.length === 0) {
             let port = 0;
             const portEnv = computeRuntimeEnvironment(sys, ["PORT"]).PORT;
@@ -281,7 +256,7 @@ export function parseCommandInvocation(sysOrArgs: ConfigRuntime | string[], args
     }
 
     // Validate that local file targets exist before booting the sandbox.
-    if (resolvedTarget && !parsed.isEval && !isSelfTest && !isHelpOrVersion) {
+    if (resolvedTarget && !parsed.isEval && !isHelpOrVersion) {
         const isUrl = resolvedTarget.startsWith("http://") || resolvedTarget.startsWith("https://") || resolvedTarget.startsWith("data:") || resolvedTarget.startsWith("file://");
         if (!isUrl) {
             try {
@@ -450,7 +425,6 @@ export function buildCtxImport(): Record<string, string> {
 export function buildWebRTCScopes(): Record<string, Record<string, string>> {
     const internalScopeUrl = new URL("./internal/", import.meta.url).href;
     const selfUrl = import.meta.url;
-    const selfDirUrl = new URL("./", import.meta.url).href;
 
     const nodePassthrough: Record<string, string> = {
         "node:net": "node:net",
@@ -466,11 +440,20 @@ export function buildWebRTCScopes(): Record<string, Record<string, string>> {
         "node:dgram": SINKHOLE_URI,
     };
 
-    return {
+    const scopes: Record<string, Record<string, string>> = {
         [internalScopeUrl]: nodePassthrough,
-        [selfDirUrl]: nodePassthrough,
         [selfUrl]: nodePassthrough,
     };
+
+    // In source mode, sibling .ts files under src/ need the passthrough too.
+    // In bundled mode, selfDirUrl would be file:///tmp/ which is far too broad
+    // and would grant node passthrough to child process targets under /tmp/.
+    if (selfUrl.endsWith(".ts")) {
+        const selfDirUrl = new URL("./", import.meta.url).href;
+        scopes[selfDirUrl] = nodePassthrough;
+    }
+
+    return scopes;
 }
 
 /**

@@ -1,6 +1,6 @@
 import { resolve, dirname } from "https://deno.land/std@0.224.0/path/mod.ts";
 import { printWarning } from "../log.ts";
-import { resolveWebrunEntryPath } from "../sys.ts";
+
 import type { HostRuntime } from "../types.ts";
 
 export async function handleCliCommands(sys: HostRuntime, args: string[], projectRoot: string) {
@@ -21,18 +21,6 @@ export async function handleCliCommands(sys: HostRuntime, args: string[], projec
         sys.exit(0);
     }
 
-    const hasSelfTest = webrunFlags.some(f => f === "--self-test" || f.startsWith("--self-test="));
-    if (webrunFlags.includes("--self-check") || hasSelfTest) {
-        const checkCmd = new sys.Command(sys.execPath(), {
-            args: ["check", resolveWebrunEntryPath(sys, import.meta.url)],
-            stdout: "inherit",
-            stderr: "inherit"
-        });
-        const status = await checkCmd.output();
-        if (status.code !== 0 || !hasSelfTest) {
-            sys.exit(status.code);
-        }
-    }
 
     if (webrunFlags.includes("--help") || webrunFlags.includes("-h")) {
         try {
@@ -60,7 +48,7 @@ Options:
   --test[=<filter>]       Run test suites (with optional name filter)
   --check-only            Perform type checking on the target script without executing it
   --no-check              Skip TypeScript type checking
-  --self-test[=<filter>]  Run the built-in test suite (with optional suite filter)
+
 ${selfCommands}`);
             const contractMatch = readmeContent.match(/## API[^\n]*\n+([\s\S]*?)(\n## |$)/i);
             if (contractMatch && contractMatch[1]) {

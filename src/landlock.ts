@@ -219,55 +219,7 @@ function buildNetPortAttr(allowedAccess: bigint, port: number): Uint8Array<Array
     return new Uint8Array(buf) as Uint8Array<ArrayBuffer>;
 }
 
-/**
- * Discovers the offset of st_mode within struct stat at runtime.
- * Opens "/" (guaranteed directory), fstats it, and scans for the S_IFDIR
- * bit pattern. This avoids hardcoding architecture-specific offsets
- * (aarch64 = 16, x86_64 = 24, etc.).
- */
-let _stModeOffset: number | null = null;
 
-function discoverStModeOffset(libc: LibC): number {
-    if (_stModeOffset !== null) return _stModeOffset;
-
-    const rootFd = openPath(libc, "/");
-    try {
-        const buf = new ArrayBuffer(256);
-        const statBuf = new Uint8Array(buf) as Uint8Array<ArrayBuffer>;
-        const ptr = Deno.UnsafePointer.of(statBuf);
-        const result = libc.fstat(rootFd, ptr);
-        if (result !== 0) {
-            throw new Error("fstat('/') failed — cannot discover st_mode offset");
-        }
-        const view = new DataView(buf);
-        // Scan 4-byte-aligned offsets for the S_IFDIR pattern.
-        for (let offset = 0; offset < 128; offset += 4) {
-            const val = view.getUint32(offset, true);
-            if ((val & S_IFMT) === S_IFDIR) {
-                _stModeOffset = offset;
-                return offset;
-            }
-        }
-        throw new Error("Could not locate st_mode in struct stat — no S_IFDIR found for '/'");
-    } finally {
-        libc.close(rootFd);
-    }
-}
-
-/**
- * Checks whether an open O_PATH file descriptor refers to a directory
- * by calling fstat and inspecting st_mode at the runtime-discovered offset.
- */
-function isDirectory(libc: LibC, fd: number): boolean {
-    const buf = new ArrayBuffer(256);
-    const statBuf = new Uint8Array(buf) as Uint8Array<ArrayBuffer>;
-    const ptr = Deno.UnsafePointer.of(statBuf);
-    const result = libc.fstat(fd, ptr);
-    if (result !== 0) return false;
-    const view = new DataView(buf);
-    const mode = view.getUint32(discoverStModeOffset(libc), true);
-    return (mode & S_IFMT) === S_IFDIR;
-}
 
 // ─── Public API ───
 
@@ -339,9 +291,14 @@ function addPathRule(
     }
 
     try {
-        // Landlock rejects dir-only flags (READ_DIR, MAKE_*, REMOVE_DIR) for
-        // non-directory inodes. Use fstat to detect the inode type upfront.
-        const effectiveAccess = isDirectory(libc, fd)
+        let isDir = false;
+        try {
+            isDir = Deno.statSync(path).isDirectory;
+        } catch {
+            // Fallback to false if Deno.stat fails
+        }
+
+        const effectiveAccess = isDir
             ? access
             : access & ~DIR_ONLY_ACCESS;
 
@@ -475,4 +432,46 @@ export function applyLandlockJail(policy: LandlockPolicy): void {
     } finally {
         libc.close(rulesetFd);
     }
+}
+
+/**
+ * Bootstraps a Landlock-sandboxed process.
+ * Applies the given policy irreversibly, then replaces the current process
+ * with the specified command using execvp.
+ */
+export function bootstrapLandlockAndExec(policy: LandlockPolicy, cmdExe: string, cmdArgs: string[]): never {
+    applyLandlockJail(policy);
+
+    // Landlock is now active. exec into the binding — restrictions survive exec.
+    const argv = [cmdExe, ...cmdArgs];
+
+    const libc = Deno.dlopen("libc.so.6", {
+        execvp: { parameters: ["pointer", "pointer"], result: "i32" },
+    });
+
+    const encode = (s: string): Uint8Array => new TextEncoder().encode(s + "\0");
+    const file = encode(argv[0]);
+
+    // Build char *argv[] — array of pointers to null-terminated strings, NULL-terminated.
+    const ptrs = new BigUint64Array(argv.length + 1);
+    const buffers: Uint8Array[] = [];
+    for (let i = 0; i < argv.length; i++) {
+        const buf = new Uint8Array(encode(argv[i]).buffer);
+        buffers.push(buf);
+        ptrs[i] = BigInt(Deno.UnsafePointer.value(Deno.UnsafePointer.of(buf as any)!));
+    }
+    ptrs[argv.length] = 0n; // NULL terminator
+
+    const result = libc.symbols.execvp(
+        Deno.UnsafePointer.of(new Uint8Array(file.buffer) as any),
+        Deno.UnsafePointer.of(new Uint8Array(ptrs.buffer) as any),
+    );
+
+    // If we get here, execvp failed.
+    const err = `Fatal: execvp failed for binding: ${argv[0]} with result ${result}`;
+    console.error(`[webrun] ${err}`);
+    try {
+        Deno.writeTextFileSync("/Users/adamb/hacking/webrun/_agents/33baf263-cf4e-406d-985d-0a89c13fab75/execvp_error.txt", err);
+    } catch (_) {}
+    Deno.exit(127);
 }

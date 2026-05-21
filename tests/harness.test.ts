@@ -53,7 +53,7 @@ function hasFailed(lines: string[], name: string): boolean {
 }
 
 // Trivially passing / failing test bodies.
-const PASS = async (_t: TestContext) => {};
+const PASS = async (_t: TestContext) => { };
 const FAIL = async (_t: TestContext) => { throw new Error("deliberate"); };
 
 // =========================================================
@@ -66,26 +66,26 @@ const assertionCases: Array<{
     expectPass: boolean;
     expectMsg?: string;
 }> = [
-    { name: "assert(true) passes",       fn: async t => t.assert(true),              expectPass: true  },
-    { name: "assert(false) fails",        fn: async t => t.assert(false),             expectPass: false, expectMsg: "Assertion failed" },
-    { name: "assert(false,msg) message",  fn: async t => t.assert(false, "custom msg"), expectPass: false, expectMsg: "custom msg" },
-    { name: "assert(0) fails",            fn: async t => t.assert(0),                 expectPass: false },
-    { name: "assert('') fails",           fn: async t => t.assert(""),                expectPass: false },
-    { name: "assert(null) fails",         fn: async t => t.assert(null),              expectPass: false },
-    { name: "assert(undefined) fails",    fn: async t => t.assert(undefined),         expectPass: false },
-    { name: "assert(1) passes",           fn: async t => t.assert(1),                 expectPass: true  },
-    { name: "assert({}) passes",          fn: async t => t.assert({}),                expectPass: true  },
-    { name: "fail() fails",               fn: async t => t.fail(),                    expectPass: false, expectMsg: "Test failed explicitly" },
-    { name: "fail(msg) message",          fn: async t => t.fail("explicit"),          expectPass: false, expectMsg: "explicit" },
-    {
-        name: "assert(true) then assert(false) fails",
-        fn: async t => { t.assert(true); t.assert(false, "second"); },
-        expectPass: false,
-        expectMsg: "second",
-    },
-];
+        { name: "assert(true) passes", fn: async t => t.assert(true), expectPass: true },
+        { name: "assert(false) fails", fn: async t => t.assert(false), expectPass: false, expectMsg: "Assertion failed" },
+        { name: "assert(false,msg) message", fn: async t => t.assert(false, "custom msg"), expectPass: false, expectMsg: "custom msg" },
+        { name: "assert(0) fails", fn: async t => t.assert(0), expectPass: false },
+        { name: "assert('') fails", fn: async t => t.assert(""), expectPass: false },
+        { name: "assert(null) fails", fn: async t => t.assert(null), expectPass: false },
+        { name: "assert(undefined) fails", fn: async t => t.assert(undefined), expectPass: false },
+        { name: "assert(1) passes", fn: async t => t.assert(1), expectPass: true },
+        { name: "assert({}) passes", fn: async t => t.assert({}), expectPass: true },
+        { name: "fail() fails", fn: async t => t.fail(), expectPass: false, expectMsg: "Test failed explicitly" },
+        { name: "fail(msg) message", fn: async t => t.fail("explicit"), expectPass: false, expectMsg: "explicit" },
+        {
+            name: "assert(true) then assert(false) fails",
+            fn: async t => { t.assert(true); t.assert(false, "second"); },
+            expectPass: false,
+            expectMsg: "second",
+        },
+    ];
 
-export async function testCategory1_CoreAssertions(outerT: TestContext) {
+export async function testCoreAssertions(outerT: TestContext) {
     for (const tc of assertionCases) {
         await outerT.run(tc.name, async (t: TestContext) => {
             const { summary, lines } = await run([{ name: tc.name, fn: tc.fn }]);
@@ -117,32 +117,32 @@ const skipCases: Array<{
     expectMsg?: string;
     expectNoMsg?: string;
 }> = [
-    {
-        name: "skip() marks skipped",
-        fn: async t => t.skip(),
-        expectSkipped: true,
-    },
-    {
-        name: "skip(reason) shows reason in output",
-        fn: async t => t.skip("not applicable"),
-        expectSkipped: true,
-        expectMsg: "ignored", // Deno uses "ignored" for skipped
-    },
-    {
-        name: "skip prevents remaining body",
-        fn: async t => { t.skip("r"); t.fail("unreachable"); },
-        expectSkipped: true,
-        expectNoMsg: "unreachable",
-    },
-    {
-        name: "skip doesn't affect sibling",
-        // Tested by running two tests; skip is per-test only.
-        fn: async _t => {},  // placeholder, tested via custom run below
-        expectSkipped: false, // overridden in custom run
-    },
-];
+        {
+            name: "skip() marks skipped",
+            fn: async t => t.skip(),
+            expectSkipped: true,
+        },
+        {
+            name: "skip(reason) shows reason in output",
+            fn: async t => t.skip("not applicable"),
+            expectSkipped: true,
+            expectMsg: "ignored", // Deno uses "ignored" for skipped
+        },
+        {
+            name: "skip prevents remaining body",
+            fn: async t => { t.skip("r"); t.fail("unreachable"); },
+            expectSkipped: true,
+            expectNoMsg: "unreachable",
+        },
+        {
+            name: "skip doesn't affect sibling",
+            // Tested by running two tests; skip is per-test only.
+            fn: async _t => { },  // placeholder, tested via custom run below
+            expectSkipped: false, // overridden in custom run
+        },
+    ];
 
-export async function testCategory2_SkipSemantics(outerT: TestContext) {
+export async function testSkipSemantics(outerT: TestContext) {
     // Simple skip cases.
     for (const tc of skipCases.slice(0, 3)) {
         await outerT.run(tc.name, async (t: TestContext) => {
@@ -190,7 +190,7 @@ export async function testCategory2_SkipSemantics(outerT: TestContext) {
 // CATEGORY 3: Nesting (t.run)
 // =========================================================
 
-export async function testCategory3_Nesting(outerT: TestContext) {
+export async function testNesting(outerT: TestContext) {
     await outerT.run("single sub-step appears indented", async (t: TestContext) => {
         const { lines } = await run([{
             name: "parent",
@@ -214,7 +214,7 @@ export async function testCategory3_Nesting(outerT: TestContext) {
             },
         }]);
         t.assert(contains(lines, "alpha"), "Missing alpha");
-        t.assert(contains(lines, "beta"),  "Missing beta");
+        t.assert(contains(lines, "beta"), "Missing beta");
     });
 
     await outerT.run("three levels deep all appear", async (t: TestContext) => {
@@ -284,7 +284,7 @@ export async function testCategory3_Nesting(outerT: TestContext) {
 // CATEGORY 4: Filtering
 // =========================================================
 
-export async function testCategory4_Filtering(outerT: TestContext) {
+export async function testFiltering(outerT: TestContext) {
     // Table: [filterStr, tests, expectRan, expectNotRan]
     const filterCases: Array<{
         name: string;
@@ -293,38 +293,38 @@ export async function testCategory4_Filtering(outerT: TestContext) {
         expectPassedNames: string[];
         expectSkippedOrAbsent: string[];
     }> = [
-        {
-            name: "top-level match runs only matching test",
-            filter: "Alpha",
-            tests: [
-                { name: "Alpha", fn: PASS },
-                { name: "Beta",  fn: PASS },
-            ],
-            expectPassedNames: ["Alpha"],
-            expectSkippedOrAbsent: ["Beta"],
-        },
-        {
-            name: "partial match (substring)",
-            filter: "lph",
-            tests: [
-                { name: "Alpha", fn: PASS },
-                { name: "Beta",  fn: PASS },
-            ],
-            expectPassedNames: ["Alpha"],
-            expectSkippedOrAbsent: ["Beta"],
-        },
-        {
-            name: "filter matches multiple top-level",
-            filter: "test",
-            tests: [
-                { name: "testA", fn: PASS },
-                { name: "testB", fn: PASS },
-                { name: "other", fn: PASS },
-            ],
-            expectPassedNames: ["testA", "testB"],
-            expectSkippedOrAbsent: ["other"],
-        },
-    ];
+            {
+                name: "top-level match runs only matching test",
+                filter: "Alpha",
+                tests: [
+                    { name: "Alpha", fn: PASS },
+                    { name: "Beta", fn: PASS },
+                ],
+                expectPassedNames: ["Alpha"],
+                expectSkippedOrAbsent: ["Beta"],
+            },
+            {
+                name: "partial match (substring)",
+                filter: "lph",
+                tests: [
+                    { name: "Alpha", fn: PASS },
+                    { name: "Beta", fn: PASS },
+                ],
+                expectPassedNames: ["Alpha"],
+                expectSkippedOrAbsent: ["Beta"],
+            },
+            {
+                name: "filter matches multiple top-level",
+                filter: "test",
+                tests: [
+                    { name: "testA", fn: PASS },
+                    { name: "testB", fn: PASS },
+                    { name: "other", fn: PASS },
+                ],
+                expectPassedNames: ["testA", "testB"],
+                expectSkippedOrAbsent: ["other"],
+            },
+        ];
 
     for (const tc of filterCases) {
         await outerT.run(tc.name, async (t: TestContext) => {
@@ -365,22 +365,22 @@ const errorCases: Array<{
     expectPass: boolean;
     expectMsgContains?: string;
 }> = [
-    { name: "async delay then assert(true)", fn: async t => { await new Promise(r => setTimeout(r, 5)); t.assert(true); }, expectPass: true },
-    { name: "async rejection", fn: async _t => { await Promise.reject(new Error("boom")); }, expectPass: false, expectMsgContains: "boom" },
-    { name: "throw Error", fn: async _t => { throw new Error("thrown"); }, expectPass: false, expectMsgContains: "thrown" },
-    { name: "throw string", fn: async _t => { throw "string error"; }, expectPass: false, expectMsgContains: "string error" },
-    { name: "throw number", fn: async _t => { throw 42; }, expectPass: false, expectMsgContains: "42" },
-    { name: "throw undefined", fn: async _t => { throw undefined; }, expectPass: false },
-    { name: "throw null", fn: async _t => { throw null; }, expectPass: false },
-    {
-        name: "Error with no stack",
-        fn: async _t => { const e = new Error("stackless"); delete (e as any).stack; throw e; },
-        expectPass: false,
-        expectMsgContains: "stackless",
-    },
-];
+        { name: "async delay then assert(true)", fn: async t => { await new Promise(r => setTimeout(r, 5)); t.assert(true); }, expectPass: true },
+        { name: "async rejection", fn: async _t => { await Promise.reject(new Error("boom")); }, expectPass: false, expectMsgContains: "boom" },
+        { name: "throw Error", fn: async _t => { throw new Error("thrown"); }, expectPass: false, expectMsgContains: "thrown" },
+        { name: "throw string", fn: async _t => { throw "string error"; }, expectPass: false, expectMsgContains: "string error" },
+        { name: "throw number", fn: async _t => { throw 42; }, expectPass: false, expectMsgContains: "42" },
+        { name: "throw undefined", fn: async _t => { throw undefined; }, expectPass: false },
+        { name: "throw null", fn: async _t => { throw null; }, expectPass: false },
+        {
+            name: "Error with no stack",
+            fn: async _t => { const e = new Error("stackless"); delete (e as any).stack; throw e; },
+            expectPass: false,
+            expectMsgContains: "stackless",
+        },
+    ];
 
-export async function testCategory5_ErrorIsolation(outerT: TestContext) {
+export async function testErrorIsolation(outerT: TestContext) {
     // Failing test A doesn't prevent test B from running.
     await outerT.run("failing test doesn't abort sibling", async (t: TestContext) => {
         let bRan = false;
@@ -442,7 +442,7 @@ export async function testCategory5_ErrorIsolation(outerT: TestContext) {
 // CATEGORY 6: Output Format Conformance
 // =========================================================
 
-export async function testCategory6_OutputFormat(outerT: TestContext) {
+export async function testOutputFormat(outerT: TestContext) {
     await outerT.run("header line: 'running N tests from <source>'", async (t: TestContext) => {
         const { lines } = await run([{ name: "T", fn: PASS }]);
         const sl = stripped(lines);
@@ -570,7 +570,7 @@ export async function testCategory6_OutputFormat(outerT: TestContext) {
 // CATEGORY 7: Edge Cases
 // =========================================================
 
-export async function testCategory7_EdgeCases(outerT: TestContext) {
+export async function testEdgeCases(outerT: TestContext) {
     await outerT.run("empty suite returns 0/0/0", async (t: TestContext) => {
         const { summary } = await run([]);
         t.assert(summary.passed === 0 && summary.failed === 0 && summary.skipped === 0,
@@ -633,8 +633,8 @@ export async function testCategory7_EdgeCases(outerT: TestContext) {
             { name: "F1", fn: FAIL },
             { name: "S1", fn: async (t2: TestContext) => t2.skip() },
         ]);
-        t.assert(summary.passed === 2,  `Expected 2 passed,  got ${summary.passed}`);
-        t.assert(summary.failed === 1,  `Expected 1 failed,  got ${summary.failed}`);
+        t.assert(summary.passed === 2, `Expected 2 passed,  got ${summary.passed}`);
+        t.assert(summary.failed === 1, `Expected 1 failed,  got ${summary.failed}`);
         t.assert(summary.skipped === 1, `Expected 1 skipped, got ${summary.skipped}`);
     });
 }
@@ -648,7 +648,7 @@ export async function testCategory7_EdgeCases(outerT: TestContext) {
 // root cause of a regression where `make test` appeared to hang for the
 // entire suite duration before printing all results at once.
 
-export async function testCategory8_Streaming(outerT: TestContext) {
+export async function testStreaming(outerT: TestContext) {
     await outerT.run("sub-step results stream inline with execution", async (t: TestContext) => {
         // Record the interleaving of execution events and print calls.
         // If streaming works, the sequence should be:
@@ -708,7 +708,7 @@ export async function testCategory8_Streaming(outerT: TestContext) {
             name: "Top",
             fn: async (t2: TestContext) => {
                 await t2.run("child", async (t3: TestContext) => {
-                    await t3.run("leaf", async () => {});
+                    await t3.run("leaf", async () => { });
                 });
             },
         }], {}, "nested-stream.test.ts", print);

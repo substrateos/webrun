@@ -91,7 +91,7 @@ export async function testSecuritySinkholeProtection(t: any) {
 
 // ── H3: spawn server must not leak host env into ctx.webrun() children ───────
 
-export async function testSecuritySpawnEnvLeak(t: TestContext) {
+export async function testSecuritySpawnEnvLeak(t: any) {
     // The spawn server at spawn.ts:111-118 copies the full host env into
     // child processes (Deno.env.toObject()). This means host secrets
     // (AWS_SECRET_KEY, DATABASE_URL, etc.) leak to children spawned via
@@ -118,6 +118,13 @@ export async function testSecuritySpawnEnvLeak(t: TestContext) {
         // To observe: check if the child can see vars it shouldn't.
         // Since --eval creates a no-permissions config, the child's
         // ctx.env should be empty.
+        const { makeTempDir } = await import("webrun/ctx");
+        const tmpDir = await makeTempDir();
+        const webrunJson = await tmpDir.getFileHandle("webrun.json", { create: true });
+        const writer = await webrunJson.createWritable();
+        await writer.write(new TextEncoder().encode("{}"));
+        await writer.close();
+
         const result = await webrun(
             ["--eval", `
                 import { env } from "webrun/ctx";
@@ -125,7 +132,7 @@ export async function testSecuritySpawnEnvLeak(t: TestContext) {
                 console.log("ENV_KEYS:" + keys.length);
                 if (keys.length > 0) console.log("ENV_LEAKED:" + keys.join(","));
             `],
-            {},
+            { cwd: tmpDir.name },
         );
         const stdout = result.stdout || "";
         // --eval creates a config with no permissions.env.
@@ -155,7 +162,7 @@ export async function testSecuritySelfTestJailBypass(t: TestContext) {
     const mockSys = {
         execPath: () => "/usr/bin/deno",
         Command: class {} as any,
-        realPathSync: (p: string) => p,
+        realPathSync: (p: string | URL) => String(p),
     };
     const mockPolicy = {
         isPwdAllowed: true,
@@ -245,6 +252,12 @@ export async function testSecurityBindingEnvDefault(t: TestContext) {
         DATABASE_URL: "postgres://prod:secret@db.internal/main",
         PATH: "/usr/bin:/bin",
         GITHUB_TOKEN: "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    };
+
+    const mockSys = {
+        execPath: () => "/usr/bin/deno",
+        Command: class {} as any,
+        realPathSync: (p: string | URL) => String(p),
     };
 
     await t.run("undeclared permissions.env does not leak host secrets", async () => {

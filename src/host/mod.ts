@@ -1,5 +1,8 @@
 import { resolve, dirname } from "https://deno.land/std@0.224.0/path/mod.ts";
-import { pathToFileURL } from "node:url";
+/** Web-standard replacement for node:url's pathToFileURL. */
+function pathToFileURL(path: string): URL {
+    return new URL("file://" + encodeURI(path).replace(/#/g, "%23").replace(/\?/g, "%3F"));
+}
 import { printExecutionError, printUsageError } from "../log.ts";
 import { WebrunConfig, SandboxContextPayload, HostRuntime, Signal, NetAddr, CommandInvocation, BindingEntry, CommandOptions } from "../types.ts";
 import { parseCommandInvocation, parseRawArguments, computeRuntimeEnvironment } from "../config.ts";
@@ -16,67 +19,8 @@ import { resolveOpfsStorage } from "./opfs.ts";
 import type { MuxProxy } from "../mux.ts";
 import { processHtmlTestTargets } from "./html_test.ts";
 
-// =========================================================
-// LOCATION CONFIG RESOLUTION
-// =========================================================
-
-import type { WebrunLocationConfig, WebrunPermissions } from "../types.ts";
-
-/**
- * Resolves the most specific location config for a given target path.
- * Matches the target against location keys (resolved relative to configDir).
- * Returns the matched WebrunLocationConfig or null if no match.
- */
-export function resolveLocationConfig(
-    config: WebrunConfig,
-    _configDir: string,
-    targetPath: string,
-): WebrunLocationConfig | null {
-    if (!config.locations) return null;
-    for (const [locPath, locConfig] of Object.entries(config.locations)) {
-        // Location keys are absolute after policy merge (resolveLocalConfiguration).
-        const prefix = locPath.endsWith("/") ? locPath : locPath + "/";
-        if (targetPath === locPath || targetPath.startsWith(prefix)) {
-            return locConfig;
-        }
-    }
-    return null;
-}
-
-/**
- * Applies a matched location config onto the root config, returning the
- * effective permissions. Merge semantics:
- *   - permissions: location replaces root (narrowing, not merging)
- *   - limits: location fields override root fields (shallow merge)
- *   - bindings: location entries override root entries (shallow merge)
- *   - importMap: returned for the caller to append to importMapPaths
- *
- * Mutates config.permissions, config.limits, and config.bindings in place.
- * Returns the active permissions for downstream use.
- */
-export function applyLocationOverrides(
-    config: WebrunConfig,
-    location: WebrunLocationConfig,
-): { activePerms: WebrunPermissions } {
-    let activePerms = config.permissions || {};
-    if (location.permissions) {
-        activePerms = location.permissions;
-        config.permissions = activePerms;
-    }
-    if (location.limits) {
-        config.limits = {
-            ...config.limits,
-            ...location.limits,
-        };
-    }
-    if (location.bindings) {
-        config.bindings = {
-            ...config.bindings,
-            ...location.bindings,
-        };
-    }
-    return { activePerms };
-}
+import { resolveLocationConfig, applyLocationOverrides } from "./location_config.ts";
+export { resolveLocationConfig, applyLocationOverrides };
 
 // =========================================================
 // HOST: Process lifecycle, binding orchestration, and cleanup
@@ -288,7 +232,7 @@ async function _spawnSandboxProcess(sys: HostRuntime, cwd: string, args: string[
     if (!peekedArgs.isEval) {
         let explicitPath = "";
         const positionalArgs: string[] = peekedArgs.injectedArgsObj["--"] || [];
-        if (!peekedArgs.isSelfTest && positionalArgs.length > 0 && !positionalArgs[0].startsWith("http") && !positionalArgs[0].startsWith("data:")) {
+        if (positionalArgs.length > 0 && !positionalArgs[0].startsWith("http") && !positionalArgs[0].startsWith("data:")) {
             explicitPath = positionalArgs[0];
         } else if (peekedArgs.targetScriptPath && peekedArgs.targetScriptPath !== "") {
             explicitPath = peekedArgs.targetScriptPath;
@@ -363,17 +307,6 @@ async function _spawnSandboxProcess(sys: HostRuntime, cwd: string, args: string[
         }
     }
 
-    if (invocation.action === "test" && peekedArgs.isSelfTest) {
-        // The self-test harness needs wildcard capabilities to orchestrate tests
-        // and spawn sub-processes with various limits.
-        activePerms = {
-            network: ["*"],
-            env: ["*"],
-            bindings: ["*"],
-            storage: { ".": { access: "read" } }
-        };
-        config.permissions = activePerms;
-    }
 
     const policy = evaluateEnclavePolicy(sys, activePerms.storage || {}, activePerms.bindings || [], configDir, effectiveCwd, isolatedTmp);
 

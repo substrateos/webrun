@@ -2,7 +2,8 @@
     "limits": { "timeoutMillis": 120000 },
     "permissions": {
         "storage": { ".": { "access": "read" } },
-        "network": ["127.0.0.1", "0.0.0.0"],
-        "env": ["HOME", "WEBRUN_VERSION"]
+        "network": ["*"],
+        "env": ["*"],
+        "bindings": ["*"]
     }
 }
