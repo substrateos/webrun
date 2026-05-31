@@ -1,0 +1,15 @@
+[
+  {
+    "name": "ctx.meta.url and ctx.meta.resolve",
+    "args": ["src/main.js"],
+    "expect": {
+      "exit_code": 0,
+      "stdout": [
+        {"contains": "META_URL_OK"},
+        {"contains": "META_RESOLVE_RELATIVE_OK"},
+        {"contains": "META_RESOLVE_PARENT_OK"},
+        {"contains": "META_RESOLVE_ABSOLUTE_OK"}
+      ]
+    }
+  }
+]

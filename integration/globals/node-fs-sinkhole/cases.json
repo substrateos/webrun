@@ -1,0 +1,23 @@
+[
+  {
+    "name": "Sinkholes node:fs dynamic imports",
+    "args": [
+      "src/node_fs.js"
+    ],
+    "runners": [
+      "cli",
+      "deno-shim"
+    ],
+    "expect_webrun": {
+      "exit_code": 1,
+      "stderr": [
+        {
+          "contains": "Security Error: Node/NPM modules are blocked"
+        }
+      ]
+    },
+    "expect_deno": {
+      "exit_code": 0
+    }
+  }
+]

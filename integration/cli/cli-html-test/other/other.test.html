@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html>
+<head>
+</head>
+<body>
+    <script type="module">
+import { otherGreeting } from "./other_greeting.ts";
+
+export function testOtherGreeting() {
+    if (otherGreeting() !== "Hello from other") {
+        throw new Error("Expected 'Hello from other', got: " + otherGreeting());
+    }
+}
+
+
+    </script>
+</body>
+</html>

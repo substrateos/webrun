@@ -1,0 +1,20 @@
+[
+  {
+    "name": "shared run deduplication and handle surface",
+    "runner": "cli",
+    "args": ["parent.js"],
+    "timeout_ms": 15000,
+    "expect": {
+      "exit_code": 0,
+      "stdout": [
+        {"contains": "PASS:dedup"},
+        {"contains": "PASS:identity"},
+        {"contains": "PASS:stdout_empty"},
+        {"contains": "PASS:stderr_empty"},
+        {"contains": "PASS:signal_noop"},
+        {"contains": "PASS:independent"},
+        {"contains": "PASS:multi_acquire"}
+      ]
+    }
+  }
+]

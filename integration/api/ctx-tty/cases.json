@@ -1,0 +1,61 @@
+[
+  {
+    "name": "ctx.tty has correct shape or is undefined",
+    "args": ["src/tty_piped.js"],
+    "expect": {
+      "exit_code": 0,
+      "stdout": [{"contains": "_OK"}]
+    }
+  },
+  {
+    "name": "tty is importable from webrun/ctx",
+    "args": ["src/tty_import.js"],
+    "expect": {
+      "exit_code": 0,
+      "stdout": [{"contains": "TTY_IMPORT_OK"}]
+    }
+  },
+  {
+    "name": "ctx.tty lifecycle: setRawMode, isRaw, columns, rows",
+    "runner": "cli",
+    "steps": [
+      {
+        "args": ["src/tty_lifecycle.js"],
+        "expect": {
+          "exit_code": 0,
+          "stdout": [{"contains": "LIFECYCLE_OK"}],
+          "stderr": []
+        }
+      }
+    ]
+  },
+  {
+    "name": "ctx.tty cleanup: raw mode restored after exception",
+    "runner": "cli",
+    "steps": [
+      {
+        "args": ["src/tty_cleanup.js"],
+        "expect": {
+          "exit_code": "nonzero",
+          "stdout": [{"contains": "RAW_ENABLED"}],
+          "stderr": [{"contains": "DELIBERATE_CRASH"}]
+        }
+      }
+    ]
+  },
+
+  {
+    "name": "ctx.tty raw mode protects stdin reads from EAGAIN",
+    "runner": "cli",
+    "steps": [
+      {
+        "args": ["src/tty_eagain.js"],
+        "expect": {
+          "exit_code": 0,
+          "stdout": [{"contains": "HANG_SUCCESS"}],
+          "stderr": []
+        }
+      }
+    ]
+  }
+]

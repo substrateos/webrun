@@ -1,0 +1,17 @@
+[
+  {
+    "name": "Separates flags and positional args into distinct ctx fields",
+    "args": ["src/positional.js", "--=hacked", "positionalValue"],
+    "expect": {
+      "exit_code": 0
+    }
+  },
+  {
+    "name": "argv adheres to POSIX/Node.js conventions with executable at index 0",
+    "args": ["src/argv.js", "--mode", "demo"],
+    "expect": {
+      "exit_code": 0,
+      "stdout": [{"contains": "ARGV_OK"}]
+    }
+  }
+]

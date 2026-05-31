@@ -1,1 +1,0 @@
-{"name": "pkg_test", "webrun": {"permissions": {"storage": {"testing_dir": {"access": "write"}}}}}

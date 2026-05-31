@@ -1,0 +1,50 @@
+[
+  {
+    "name": "RTCPeerConnection is exposed globally and establishes Loopback DataChannel seamlessly",
+    "args": [
+      "p2p.js"
+    ],
+    "expect": {
+      "exit_code": 0,
+      "stdout": [
+        {
+          "contains": "WEBRTC_P2P_LOOPBACK_SUCCESS"
+        }
+      ]
+    },
+    "runner": "cli",
+    "timeout_ms": 15000
+  },
+  {
+    "name": "Transfers large fragmented payloads over DataChannel reliably",
+    "args": [
+      "throughput.js"
+    ],
+    "expect": {
+      "exit_code": 0,
+      "stdout": [
+        {
+          "contains": "THROUGHPUT_OK"
+        }
+      ]
+    },
+    "runner": "cli",
+    "timeout_ms": 15000
+  },
+  {
+    "name": "Releases resources reliably when RTCPeerConnection is closed",
+    "args": [
+      "teardown.js"
+    ],
+    "expect": {
+      "exit_code": 0,
+      "stdout": [
+        {
+          "contains": "TEARDOWN_OK"
+        }
+      ]
+    },
+    "runner": "cli",
+    "timeout_ms": 15000
+  }
+]

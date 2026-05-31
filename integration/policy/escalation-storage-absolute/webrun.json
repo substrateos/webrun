@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "storage": {
+      ".": { "access": "read" },
+      "/tmp": { "access": "read" }
+    }
+  }
+}

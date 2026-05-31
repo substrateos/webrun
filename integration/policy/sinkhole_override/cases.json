@@ -1,0 +1,13 @@
+[
+    {
+        "name": "user import map cannot override node:path sinkhole",
+        "args": ["main.ts"],
+        "expect": {
+            "exit_code": 0,
+            "stdout": [
+                { "absent": "SINKHOLE_BYPASSED" },
+                { "absent": "REAL_NODE_PATH" }
+            ]
+        }
+    }
+]

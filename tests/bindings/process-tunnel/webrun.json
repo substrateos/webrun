@@ -1,1 +1,0 @@
-{"bindings": {"my_backend": {"process": {"command": ["deno", "run", "-A", "backend.ts"], "portEnv": "PROCESS_PORT"}}}}

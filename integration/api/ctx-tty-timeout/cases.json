@@ -1,0 +1,15 @@
+[
+  {
+    "name": "ctx.tty cleanup: raw mode restored after timeout",
+    "runner": "cli",
+    "steps": [
+      {
+        "args": ["src/tty_timeout.js"],
+        "expect": {
+          "exit_code": 143,
+          "stdout": [{"contains": "RAW_ENABLED"}]
+        }
+      }
+    ]
+  }
+]

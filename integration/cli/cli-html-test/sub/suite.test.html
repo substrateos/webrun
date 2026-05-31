@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <script type="importmap">
+    {
+        "imports": {
+            "greeting": "../greeting.ts"
+        }
+    }
+    </script>
+</head>
+<body>
+    <script type="module">
+import { hello } from "greeting";
+import { escapeDirWorks } from "../utils.ts";
+
+export function testGreetingImport() {
+    if (hello() !== "Hello from greeting") {
+        throw new Error("Expected 'Hello from greeting', got: " + hello());
+    }
+}
+
+export function testEscapeDir() {
+    if (escapeDirWorks() !== true) {
+        throw new Error("Expected escapeDirWorks() to return true");
+    }
+}
+
+export function testRelativeImport() {
+    // This verifies that the base URL was set correctly —
+    // "greeting" resolves via the importmap to ./greeting.ts
+    // relative to THIS HTML file's directory.
+    const result = hello();
+    if (typeof result !== "string") {
+        throw new Error("Expected string from hello(), got: " + typeof result);
+    }
+}
+
+
+    </script>
+
+    <script type="module" webrun-skip>
+// This script should be skipped by the test runner.
+throw new Error("Browser-only script should not execute in test mode");
+    </script>
+</body>
+</html>

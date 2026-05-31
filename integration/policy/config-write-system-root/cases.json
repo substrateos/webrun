@@ -1,0 +1,12 @@
+[
+  {
+    "name": "Aborts if policy allows writing to the system root (/) bypassing sandbox safety",
+    "args": ["src/test.js"],
+    "expect": {
+      "exit_code": 1,
+      "stderr": [
+        {"contains": "Executable in write directory"}
+      ]
+    }
+  }
+]

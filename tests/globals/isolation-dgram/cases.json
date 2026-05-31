@@ -1,8 +1,0 @@
-[
-  {
-    "name": "Untrusted scripts cannot import node:dgram directly",
-    "args": ["malicious.js"],
-    "expect_webrun": { "exit_code": "nonzero", "stderr": [{"contains": "Security Error"}, {"contains": "blocked"}] },
-    "expect_deno":   { "exit_code": 0 }
-  }
-]

@@ -1,0 +1,23 @@
+[
+  {
+    "name": "Blocks write outside enclave (/tmp/escape)",
+    "args": [
+      "src/write_block.js"
+    ],
+    "runners": [
+      "cli",
+      "deno-shim"
+    ],
+    "expect_webrun": {
+      "exit_code": 1,
+      "stderr": [
+        {
+          "contains": "BLOCKED:"
+        }
+      ]
+    },
+    "expect_deno": {
+      "exit_code": 0
+    }
+  }
+]

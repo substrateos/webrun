@@ -1,200 +1,89 @@
-// webrun.ts — DI construction site. Captures globalThis.Deno and threads it.
-import { spawnSandboxProcess } from "./src/host/mod.ts";
-import { executeInsideSandbox } from "./src/guest.ts";
-export { executeInsideSandbox };
-export { parseRawArguments, parseCommandInvocation } from "./src/config.ts";
-
-// =========================================================
-// 5. GLOBAL ENTRYPOINT EVALUATION
-// =========================================================
-
-// Host-side UDP relay: creates a MessageChannel and manages real UDP sockets
-// on behalf of the sandboxed guest. The guest only gets port1 (a MessagePort);
-// actual network I/O happens here on the privileged side.
-function setupUdpRelay(): { port1: MessagePort; cleanup: () => void } {
-    const channel = new MessageChannel();
-    const hostPort = channel.port2;
-    const guestPort = channel.port1;
-
-    const sockets = new Map<number, any>(); // socketId -> Deno.DatagramConn
-
-    hostPort.addEventListener("message", async (e: MessageEvent) => {
-        const msg = e.data;
-
-        if (!msg || !msg.type) return;
-
-        switch (msg.type) {
-            case "bind": {
-                try {
-
-                    const conn = Deno.listenDatagram({
-                        port: msg.port || 0,
-                        hostname: msg.address || "127.0.0.1",
-                        transport: "udp"
-                    });
-                    sockets.set(msg.socketId, conn);
-
-
-                    hostPort.postMessage({
-                        type: "bound",
-                        socketId: msg.socketId,
-                        address: {
-                            address: (conn.addr as any).hostname,
-                            port: (conn.addr as any).port,
-                            family: "IPv4"
-                        }
-                    });
-
-                    // Start async receive loop
-                    (async () => {
-                        try {
-                            while (true) {
-                                const [data, remoteAddr] = await conn.receive();
-                                // data is a Uint8Array view into a pre-allocated 65507-byte
-                                // receive buffer. Slice to extract only the actual packet bytes.
-                                const packet = data.slice(0, data.byteLength);
-                                hostPort.postMessage({
-                                    type: "message",
-                                    socketId: msg.socketId,
-                                    payload: packet.buffer,
-                                    rinfo: {
-                                        address: (remoteAddr as any).hostname,
-                                        port: (remoteAddr as any).port,
-                                        family: "IPv4"
-                                    }
-                                });
-                            }
-                        } catch (_) {
-                            // Socket was closed, receive loop ends
-                        }
-                    })();
-                } catch (err: any) {
-                    hostPort.postMessage({
-                        type: "error",
-                        socketId: msg.socketId,
-                        message: err.message || String(err)
-                    });
-                }
-                break;
+const webrun = {
+    main: async function (args: string[], env: Record<string, string>, ctx: any) {
+        if (args[0]?.startsWith("--internal-webrun-sandbox")) {
+            const SandboxAdapter = await import("./src/deno/sandbox/mod.ts");
+            try {
+                await SandboxAdapter.default.main(args, env, ctx);
+            } catch (e) {
+                const { printExecutionErrorWithStack } = await import("./src/core/log.ts");
+                printExecutionErrorWithStack(e);
+                ctx.Deno.exit(1);
             }
-            case "send": {
-                const conn = sockets.get(msg.socketId);
-                if (conn) {
-                    try {
-                        const data = msg.msg instanceof Uint8Array ? msg.msg : new Uint8Array(msg.msg);
-                        await conn.send(data, {
-                            hostname: msg.address,
-                            port: msg.port,
-                            transport: "udp"
-                        });
-                    } catch (_) {
-                        // Send failures are silently dropped (matches Node dgram behavior).
-                    }
-                }
-                break;
-            }
-            case "close": {
-                const conn = sockets.get(msg.socketId);
-                if (conn) {
-                    try { conn.close(); } catch (_) {}
-                    sockets.delete(msg.socketId);
-                }
-                break;
-            }
+        } else if (args[0] === "--internal-webrun-spawner") {
+            const SpawnerModule = await import("./src/deno/spawner/mod.ts");
+            await SpawnerModule.default.main(args.slice(1), env, ctx);
+        } else if (args[0] === "--internal-webrun-proxy") {
+            const ProxyModule = await import("./src/ua_proxy/main.ts");
+            await ProxyModule.default.main(args.slice(1), env, ctx);
+        } else {
+            const HostAdapter = await import("./src/deno/host/host.ts")
+            await HostAdapter.default.main(args, env, ctx);
         }
-    });
-    hostPort.start();
-
-    const cleanup = () => {
-        for (const conn of sockets.values()) {
-            try { conn.close(); } catch (_) {}
-        }
-        sockets.clear();
-        try { hostPort.close(); } catch (_) {}
-    };
-
-    return { port1: guestPort, cleanup };
+    }
 }
 
-const isWorker = typeof (globalThis as any).WorkerGlobalScope !== 'undefined' && self instanceof (globalThis as any).WorkerGlobalScope;
+export default webrun
 
-if (!isWorker) {
-    if (Deno.args[0] === "--internal-webrun-landlock") {
-        const policyBase64 = Deno.args[1];
-        const cmdExe = Deno.args[2];
-        const cmdArgs = Deno.args.slice(3);
-        const policy = JSON.parse(atob(policyBase64));
-        const { bootstrapLandlockAndExec } = await import("./src/landlock.ts");
-        bootstrapLandlockAndExec(policy, cmdExe, cmdArgs);
-    } else if (Deno.args.includes("--internal-webrun-guest")) {
-        const payloadIndex = Deno.args.indexOf("--internal-webrun-guest");
-        const payloadPath = Deno.args[payloadIndex + 1];
-        const payloadData = JSON.parse(Deno.readTextFileSync(payloadPath));
+if (import.meta.main) {
+    const makeSignal = (await import("./src/deno/sandbox/signal.ts")).default;
+    const makeFS = (await import("./src/deno/file_system/mod.ts")).default;
+    const makeExec = (await import("./src/deno/jail/exec/mod.ts")).default;
+    const makeTTY = (await import("./src/deno/sandbox/tty.ts")).default;
+    const makeStdIO = (await import("./src/deno/worker/stdio.ts")).default;
 
-        // Apply Landlock restrictions BEFORE any untrusted code loads.
-        // This is the self-sandboxing step: the guest process restricts itself
-        // irreversibly using the policy serialized by the host.
-        if (payloadData.landlockPolicy && Deno.build.os === "linux") {
-            const { applyLandlockJail } = await import("./src/landlock.ts");
-            applyLandlockJail(payloadData.landlockPolicy);
-        }
-
-        if (payloadData.action === "test") {
-            // WebRTC: only allocate the UDP relay when explicitly enabled.
-            const webrtcEnabled = !!payloadData.config?.permissions?.webrtc;
-            const relay = webrtcEnabled ? setupUdpRelay() : null;
-            if (relay) payloadData.__udpPort = relay.port1;
-            try {
-                await executeInsideSandbox(globalThis.Deno, payloadData);
-            } finally {
-                relay?.cleanup();
+    const ctx = {
+        Deno,
+        ipc: {
+            connectWorker: async (worker: Worker, ctx: any) => {
+                const { connectWorker } = await import("./src/ipc/worker.ts");
+                return connectWorker(worker, ctx);
+            },
+            connectSpawner: async (host: any, deno: any) => {
+                const { connectSpawner } = await import("./src/ipc/spawner.ts");
+                return connectSpawner(host, deno);
+            },
+        },
+        applyJail: async (descriptor: any) => {
+            const os = Deno.build.os;
+            if (os === "darwin") {
+                const { toSeatbeltPolicy } = await import("./src/core/jail/seatbelt/mod.ts");
+                const { makeSeatbelt } = await import("./src/deno/jail/seatbelt/mod.ts");
+                const { applySeatbelt } = makeSeatbelt(Deno);
+                applySeatbelt(toSeatbeltPolicy(descriptor.caps));
+            } else if (os === "linux") {
+                const { toLandlockPolicy } = await import("./src/core/jail/landlock/mod.ts");
+                const { makeLandlock } = await import("./src/deno/jail/landlock/mod.ts");
+                const { applyLandlock } = makeLandlock(Deno);
+                applyLandlock(toLandlockPolicy(descriptor.caps));
+            } else {
+                throw new Error("Unsupported OS: " + os);
             }
-        } else {
-            const webrtcEnabled = !!payloadData.config?.permissions?.webrtc;
-            const relay = webrtcEnabled ? setupUdpRelay() : null;
-
-            const workerCode = `
-                import { executeInsideSandbox } from "${import.meta.url}";
-                self.onmessage = async (e) => {
-                    const sys = {
-                        ...globalThis.Deno,
-                        exit: (code) => {
-                            self.postMessage({ type: "exit", code });
-                            self.close();
-                        }
-                    };
-                    try {
-                        await executeInsideSandbox(sys, e.data);
-                    } catch (err) {
-                        console.error(err.message || String(err));
-                        sys.exit(1);
-                    }
-                };
-            `;
-            const blobUrl = URL.createObjectURL(new Blob([workerCode], { type: "application/javascript" }));
-            const worker = new Worker(blobUrl, { type: "module", name: "webrun-main", deno: { permissions: "inherit" } });
-            
-            worker.onmessage = (e) => {
-                if (e.data && e.data.type === "exit") {
-                    relay?.cleanup();
-                    Deno.exit(e.data.code);
-                }
-            };
-            worker.onerror = (e) => {
-                relay?.cleanup();
-                Deno.exit(1);
-            };
-            
-            // Transfer the UDP port into the worker as a Transferable (only when WebRTC is enabled).
-            const transferables: Transferable[] = [];
-            if (relay) {
-                payloadData.__udpPort = relay.port1;
-                transferables.push(relay.port1);
-            }
-            worker.postMessage(payloadData, transferables);
-            await new Promise(() => {}); // Wait forever until sys.exit is called
-        }
-    } else if (import.meta.main) {
-        await spawnSandboxProcess(Deno, Deno.cwd(), Deno.args);
-    }
+            const { revokePermissions } = await import("./src/deno/jail/mod.ts");
+            await revokePermissions(descriptor.drop);
+        },
+        signal: makeSignal(Deno),
+        fs: makeFS(Deno),
+        exit: (code: number) => Deno.exit(code),
+        exec: makeExec(Deno),
+        createWorker: async (descriptor: any) => {
+            const { applyDrop } = await import("./src/core/capabilities.ts");
+            const { toDenoPermissionsObject } = await import("./src/deno/jail/mod.ts");
+            const workerPath = descriptor.host?.bundle?.workerPath;
+            if (!workerPath) throw new Error("WEBRUN_WORKER not set — cannot locate worker blob");
+            const workerEntrypointURL = new URL(workerPath, "file:///").href;
+            const guestCaps = applyDrop(descriptor.caps, descriptor.drop);
+            const permissions = toDenoPermissionsObject(guestCaps);
+            return new Worker(workerEntrypointURL, {
+                type: "module",
+                name: "webrun-main",
+                deno: { permissions },
+            });
+        },
+        tty: makeTTY(Deno),
+        stdio: makeStdIO(Deno),
+    };
+    const env: Record<string, string> = new Proxy(Object.create(null), {
+        get: (_, key: string) => Deno.env.get(key),
+    });
+    await webrun.main(Deno.args, env, ctx)
 }

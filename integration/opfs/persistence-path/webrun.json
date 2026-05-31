@@ -1,0 +1,6 @@
+{
+  "permissions": {"storage": {".": {"access": "read"}}},
+  "extensions": {
+    "@webrun/opfs": { "origin": "path" }
+  }
+}

@@ -1,1 +1,0 @@
-[{ "name": "Permits valid narrowing of parent timeoutMillis limit", "args": ["test.js"], "cwd": "child", "expect": { "exit_code": 143 } }]

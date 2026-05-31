@@ -1,1 +1,0 @@
-[{ "name": "Blocks import maps within a writable directory proactively", "args": ["src/test.js"], "expect": { "exit_code": 1, "stderr": [{"contains": "[Security Fatal] The webrun file is within a permitted write directory. Refusing to run."}, {"contains": "Executable:"}] } }]

@@ -17,8 +17,7 @@ Download and commit the `webrun` executable directly into your repository. The s
 curl -fsSL https://github.com/substrateos/webrun/releases/latest/download/webrun-dist > ./webrun
 chmod +x ./webrun
 
-# After inspecting the downloaded file, run the built-in test suite:
-./webrun --self-test
+# After inspecting the downloaded file, you are good to go!
 ```
 
 ## QUICKSTART
@@ -76,22 +75,22 @@ You can pass local file paths or execute remote URLs directly (e.g. `webrun http
   Print the usage instructions.
 - `--dir=<path>`
   Set the sandbox execution root directory instead of the current working directory. The policy engine will discover `webrun.json` configuration files starting from this explicit path.
-- `-e, --eval <code>`
-  Evaluate the provided inline JavaScript/TypeScript code directly in the sandbox instead of executing a module.
+- `-e, --eval`
+  Evaluate the next positional argument as inline JavaScript/TypeScript code directly in the sandbox instead of executing a module.
 - `--test[=<filter>]`
   Run test suites. Discovers and runs exported functions starting with "test" inside your target script instead of the default export. Optionally filter by name substring. Supports multiple locations as positional args (e.g., `webrun --test a.test.ts b.test.ts`).
 - `--serve`
   Start an HTTP server that routes requests to the target module's `fetch` handler. If the target is a directory, serves static files. See [Serving](#serving) for details.
 - `--bind=<host>:<port>`
   Bind the server to a specific address (used with `--serve`). Examples: `--bind=127.0.0.1:8080`, `--bind=:3000`, `--bind=0.0.0.0`. Multiple `--bind` flags create multiple listeners. Defaults to `127.0.0.1` on a random port.
-- `--self-test[=<filter>]`
-  Run the built-in test suite to verify the sandbox is working correctly. Optionally filter by suite name substring.
-- `--self-bundle`
-  Package the `webrun` source files into a single executable file and print to stdout.
-- `--self-vendor`
-  Cache and vendor all external dependencies natively within the repository for offline accessibility.
-- `--self-unbundle <dest>`
-  Extract the `webrun` source files from the executable into a folder for editing.
+- `--check-only`
+  Perform type checking on the target script without executing it.
+- `--no-check`
+  Skip TypeScript type checking.
+- `--limit-time=<ms>`
+  Limit the execution time of the script to the specified number of milliseconds.
+- `--limit-memory=<mb>`
+  Limit the maximum heap memory usage of the script to the specified number of megabytes.
 
 ## CONFIGURATION
 
@@ -132,16 +131,19 @@ You can pass local file paths or execute remote URLs directly (e.g. `webrun http
       "DEBUG_MODE"
     ]
   },
-  "experimental": {
-    "opfs": { "origin": "git" }
+  "extensions": {
+    "@webrun/opfs": { "origin": "path" }
   }
 }
 ```
 
-### Aliases vs Locations
+### Configuration Properties
 
 - **`aliases`**: Map short names (like `default` or `worker`) to specific file paths or URLs. This allows you to run `./webrun worker` instead of typing the full path.
 - **`locations`**: Define specific constraints (limits, permissions, and import maps) that override the root configuration for a given path or directory. When a script matching a location path is executed, its sandbox is restricted to those specific overrides.
+- **`extensions`**: Configures the extension middleware chain. Keys are extension identifiers (e.g. `"@webrun/opfs"` for built-ins, or relative paths for user extensions), and values are per-extension configuration objects. Extensions execute in definition order.
+- **`dir`**: Overrides the working directory for targets matching this configuration.
+- **`portEnv`**: Defines the environment variable name to inject the allocated HTTP server port into when using `--serve` on binary targets (defaults to `"PORT"`).
 
 #### Permission Wildcards
 
@@ -213,7 +215,7 @@ Scripts running in `webrun` typically export a default function. The `ctx` objec
 ```javascript
 export default async function(ctx) {
   // Parsing & Execution Context
-  // E.g. `/usr/local/bin/webrun script.js --mode debug file.txt`
+  // E.g. `/usr/local/bin/webrun script.js --mode=debug file.txt`
   console.log("Target:", ctx.command); // "script.js"
   console.log("Args:", ctx.args);      // ["file.txt"] 
   console.log("Flags:", ctx.flags);    // { mode: "debug" }
@@ -236,11 +238,11 @@ export default async function(ctx) {
   const tmpFile = await tmpDir.getFileHandle("scratch.txt", { create: true });
 
   // Spawn isolated child sandboxes with flags and arguments
-  const child = await ctx.webrun(["child.js", "--child-flag", "--", "arg"]);
-  console.log(child.exitCode, child.stdout, child.stderr);
+  const child = await ctx.run(["child.js", "--child-flag", "--", "arg"]);
+  console.log(await child.exitCode);
 
   // Or evaluate code inline
-  const inline = await ctx.webrun(["--eval", "console.log('Isolated!')"]);
+  const inline = await ctx.run(["--eval", "console.log('Isolated!')"]);
 
   // Graceful signals and exits
   ctx.signal.addEventListener("abort", () => console.log("Caught SIGTERM/SIGINT"));
@@ -251,7 +253,7 @@ export default async function(ctx) {
 Context methods are also available as named imports from `webrun/ctx`:
 
 ```javascript
-import { makeTempDir, upgradeWebSocket, tty } from "webrun/ctx";
+import { makeTempDir, tty } from "webrun/ctx";
 ```
 
 ### Terminal Control
@@ -286,6 +288,11 @@ export default async function(ctx) {
 ### File System Access
 Scripts cannot use standard `fs` or other runtime-specific globals to interact with the file system. You must use `ctx.dir` (to access the host directory mapped by the configuration) or `navigator.storage` (for OPFS storage). If you try to read or write a file outside of the allowed directory, the sandbox will block the operation.
 
+If you have explicit permission (`createFileSystemHandleURL`), you can convert handles to local file URLs:
+```javascript
+const url = ctx.createFileSystemHandleURL(ctx.dir); // e.g. "file:///path/to/dir/"
+```
+
 ### Temporary Directories
 `ctx.makeTempDir()` returns a W3C `FileSystemDirectoryHandle` backed by an ephemeral directory that is automatically cleaned up when the process exits. Each call returns an independent directory. This is useful for build artifacts, caches, or any scratch space that should not persist.
 
@@ -300,24 +307,19 @@ export default async function() {
 ```
 
 ### Persistent OPFS
-By default, `navigator.storage.getDirectory()` returns an ephemeral OPFS workspace that is destroyed when the process exits. To persist data across runs, add an `experimental.opfs` section to your `webrun.json`:
+By default, `navigator.storage.getDirectory()` returns an ephemeral OPFS workspace that is destroyed when the process exits. To persist data across runs, configure the built-in `@webrun/opfs` extension in your `webrun.json`:
 
 ```json
 {
-  "experimental": {
-    "opfs": { "origin": "git" }
+  "extensions": {
+    "@webrun/opfs": { "origin": "path" }
   }
 }
 ```
 
-Two origin strategies are supported:
+The only supported persistence strategy is `"path"`, which derives its ID from the canonical filesystem path of the sandbox's execution root, ensuring a stable, per-directory workspace.
 
-| Strategy | ID Derivation | Use Case |
-|---|---|---|
-| `"git"` | Root commit hash of the git repository | Shared workspace across clones of the same repo |
-| `"path"` | Canonical filesystem path of the config directory | Per-directory workspace |
-
-Persistent OPFS data is stored at `~/.webrun/opfs/<strategy>/<id>/fs/`. An `audit.ndjson` log in the same directory records every execution session (timestamp, arguments, config path) that accesses the persistent workspace.
+Persistent OPFS data is stored at `~/.webrun/opfs/path/<id>/fs/`. An `audit.ndjson` log in the same directory records every execution session (timestamp, arguments, config path) that accesses the persistent workspace.
 
 ### Testing Scripts
 If you run `webrun --test my_script.ts`, `webrun` will look for named exports that begin with `test` and execute them using the native test runner.
@@ -376,27 +378,55 @@ export default {
 
 If the target is a directory (or no `fetch` handler is exported), `webrun` serves static files from the target path. You can define a default serve entrypoint with the `"serve"` field in `webrun.json`.
 
-#### WebSocket Upgrades
+#### WebSockets
 
-Inside a `--serve` handler, you can upgrade HTTP requests to WebSocket connections using `ctx.upgradeWebSocket()`:
+Inside a `--serve` handler or `ctx.serve()` handler, you can upgrade HTTP requests to WebSocket connections using `ctx.upgradeWebSocket()`. This method is available on the `FetchContext` passed to the `fetch` function:
 
 ```javascript
-import { upgradeWebSocket } from "webrun/ctx";
-
 export default {
-    async fetch(req) {
+    async fetch(req, env, ctx) {
         if (req.headers.get("upgrade") === "websocket") {
-            const { socket, response } = upgradeWebSocket(req);
-            socket.onmessage = (e) => socket.send("echo: " + e.data);
+            const { socket, response } = ctx.upgradeWebSocket();
+            
+            socket.onopen = () => console.log("Client connected");
+            socket.onmessage = (e) => socket.send(`Echo: ${e.data}`);
+            
             return response;
         }
-        return new Response("OK");
+        return new Response("Hello World!");
     }
 }
 ```
 
-> [!NOTE]
-> `upgradeWebSocket` is only available in `--serve` mode. Calling it in normal or `--eval` mode throws a clear error.
+> `ctx.upgradeWebSocket` is only available in a serve context. Calling it in normal or `--eval` mode throws a clear error.
+
+### Direct Sockets (TCP)
+
+If the `tcp` permission is granted, scripts can open raw TCP sockets via `ctx.TCPSocket`. This implements the W3C Direct Sockets API draft.
+
+```javascript
+export default async function(ctx) {
+  const sock = new ctx.TCPSocket("127.0.0.1", 8443);
+  const { readable, writable } = await sock.opened;
+  // Use streams...
+}
+```
+
+### Dynamic Serving
+
+Scripts can spin up a server programmatically using `ctx.serve()`, completely replacing the need for the `--serve` CLI flag:
+
+```javascript
+export default async function(ctx) {
+  const server = await ctx.serve({
+    fetch(req, env, fetchCtx) {
+      return new Response("Hello from dynamic server!");
+    }
+  }, { listen: ["http://127.0.0.1:8080"] });
+  
+  console.log("Listening on", server.urls);
+}
+```
 
 ### Web API Runtime Environment
 `webrun` executes your code within a pristine, standardized Web API environment. It is explicitly designed to behave identically to a modern browser context:

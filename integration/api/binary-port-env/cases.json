@@ -1,0 +1,14 @@
+[
+  {
+    "name": "binary mode injects PORT env from serve allocation",
+    "runner": "cli",
+    "args": ["parent.js"],
+    "timeout_ms": 10000,
+    "expect": {
+      "exit_code": 0,
+      "stdout": [
+        {"contains": "PASS:port_injected"}
+      ]
+    }
+  }
+]

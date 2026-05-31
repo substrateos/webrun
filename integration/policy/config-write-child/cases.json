@@ -1,0 +1,14 @@
+[
+  {
+    "name": "Aborts if policy allows writing to a child webrun.json directory",
+    "args": ["test.js"],
+    "cwd": "child",
+    "expect": {
+      "exit_code": 1,
+      "stderr": [
+        {"contains": "Executable in write directory"},
+        {"contains": "Executable:"}
+      ]
+    }
+  }
+]

@@ -1,0 +1,1 @@
+{"permissions": {"import": ["deno.land:443"], "network": ["deno.land"], "storage": {".": {"access": "read"}}}}

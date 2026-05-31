@@ -1,0 +1,7 @@
+{
+    "locations": { "default": "main.ts" },
+    "importMap": "custom_map.json",
+    "permissions": {
+        "storage": { ".": { "access": "read" } }
+    }
+}

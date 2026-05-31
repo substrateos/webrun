@@ -88,6 +88,7 @@
 |---|---|---|---|
 | [`fetch`](https://developer.mozilla.org/en-US/docs/Web/API/Fetch_API) / [`Request`](https://developer.mozilla.org/en-US/docs/Web/API/Request) / [`Response`](https://developer.mozilla.org/en-US/docs/Web/API/Response) / [`Headers`](https://developer.mozilla.org/en-US/docs/Web/API/Headers) | ✅ | `permissions.network` | |
 | [`WebSocket`](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket) | ✅ | `permissions.network` | Same domain restrictions as `fetch` |
+| `TCPSocket` (W3C Direct Sockets) | ✅ | `permissions.tcp` | Direct raw TCP access |
 | [`XMLHttpRequest`](https://developer.mozilla.org/en-US/docs/Web/API/XMLHttpRequest) | ❌ | | |
 | [`EventSource`](https://developer.mozilla.org/en-US/docs/Web/API/EventSource) | ❌ | | Server-Sent Events |
 
@@ -111,6 +112,7 @@
 | [`FileSystemDirectoryHandle`](https://developer.mozilla.org/en-US/docs/Web/API/FileSystemDirectoryHandle) | ✅ | `permissions.storage` | Via `ctx.dir`. Access is scoped per-path with `read` or `write` grants. |
 | [`FileSystemFileHandle`](https://developer.mozilla.org/en-US/docs/Web/API/FileSystemFileHandle) | ✅ | `permissions.storage` | |
 | [`FileSystemWritableFileStream`](https://developer.mozilla.org/en-US/docs/Web/API/FileSystemWritableFileStream) | ✅ | `permissions.storage` | Requires `access: "write"` |
+| [`FileSystemSyncAccessHandle`](https://developer.mozilla.org/en-US/docs/Web/API/FileSystemSyncAccessHandle) | ✅ | `permissions.storage` | Synchronous read/write |
 | [`navigator.storage.getDirectory()`](https://developer.mozilla.org/en-US/docs/Web/API/StorageManager/getDirectory) | ✅ | | Returns an ephemeral OPFS root scoped to this script run |
 | [`navigator.storage.estimate()`](https://developer.mozilla.org/en-US/docs/Web/API/StorageManager/estimate) | ❌ | | |
 | [`navigator.storage.persist()`](https://developer.mozilla.org/en-US/docs/Web/API/StorageManager/persist) / [`persisted()`](https://developer.mozilla.org/en-US/docs/Web/API/StorageManager/persisted) | ❌ | | |

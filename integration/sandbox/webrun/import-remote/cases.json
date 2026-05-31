@@ -1,0 +1,11 @@
+[
+  {
+    "name": "Remote HTTPS import succeeds when import and network are granted",
+    "args": ["src/test.js"],
+    "timeout_ms": 15000,
+    "expect": {
+      "exit_code": 0,
+      "stdout": [{"contains": "IMPORT_OK:bar.txt"}]
+    }
+  }
+]

@@ -1,0 +1,14 @@
+{
+    "permissions": {
+        "workers": true,
+        "storage": {
+            ".": { "access": "read" }
+        },
+        "import": [
+            "esm.sh:443"
+        ],
+        "network": [
+            "esm.sh"
+        ]
+    }
+}

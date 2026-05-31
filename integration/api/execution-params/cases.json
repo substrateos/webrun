@@ -1,0 +1,11 @@
+[
+  {
+    "name": "Receives explicit arguments, environment variables, and parsed flags via ctx object",
+    "args": ["src/test.js", "--mode=debug", "--verbose=true", "-f", "--", "val1", "val2"],
+    "env": {"API_KEY": "test_123"},
+    "expect": {
+      "exit_code": 0,
+      "stdout": [{"contains": "PARAMS_OK"}]
+    }
+  }
+]

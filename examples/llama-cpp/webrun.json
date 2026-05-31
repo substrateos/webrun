@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "network": ["*"],
+    "storage": {
+      ".": { "access": "read" }
+    },
+    "binaries": [
+      ["llama-server"]
+    ],
+    "run": true
+  },
+  "portEnv": "LLAMA_ARG_PORT"
+}

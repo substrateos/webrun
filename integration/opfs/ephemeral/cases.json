@@ -1,0 +1,10 @@
+[
+  {
+    "name": "Ephemeral OPFS baseline: no persistence across runs",
+    "runner": "cli",
+    "steps": [
+      { "args": ["write.js"], "expect": { "exit_code": 0 } },
+      { "args": ["read.js"], "expect": { "exit_code": 0 } }
+    ]
+  }
+]

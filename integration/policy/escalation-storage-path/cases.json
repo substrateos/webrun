@@ -1,0 +1,1 @@
+[{ "name": "Blocks storage path escalation", "args": ["test.js"], "cwd": "child", "expect": { "exit_code": 1, "stderr": [{"contains": "SecurityError"}, {"contains": "escapes configuration boundary"}] } }]

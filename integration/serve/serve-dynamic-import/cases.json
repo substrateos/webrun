@@ -1,0 +1,19 @@
+[
+  {
+    "name": "Serve exposes module exports via HTTP fetch",
+    "args": ["--serve", "api.js"],
+    "signal": "SIGTERM",
+    "timeout_ms": 5000,
+    "expect": {
+      "exit_code": 0,
+      "ready": { "stdout": [{"contains": "Webrun serving at"}] },
+      "http": [
+        {
+          "path": "/",
+          "status": 200,
+          "body": [{"contains": "export const answer = 42"}]
+        }
+      ]
+    }
+  }
+]

@@ -1,0 +1,23 @@
+[
+  {
+    "name": "Blocks read outside enclave (/etc/passwd)",
+    "args": [
+      "src/read_block.js"
+    ],
+    "runners": [
+      "cli",
+      "deno-shim"
+    ],
+    "expect_webrun": {
+      "exit_code": 1,
+      "stderr": [
+        {
+          "contains": "BLOCKED:"
+        }
+      ]
+    },
+    "expect_deno": {
+      "exit_code": 0
+    }
+  }
+]

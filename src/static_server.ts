@@ -1,12 +1,48 @@
-import { join, dirname, extname } from "https://deno.land/std@0.224.0/path/mod.ts";
-import { contentType } from "https://deno.land/std@0.224.0/media_types/mod.ts";
-
 /**
  * Runtime capabilities needed by the static file server.
  * Narrow subset of ServeRuntime — only file-reading.
  */
 interface StaticServerRuntime {
     readFileSync(path: string | URL): Uint8Array;
+}
+
+// Unix-compatible path helpers to avoid std/path remote dependency in guest
+function dirname(path: string): string {
+    const idx = path.lastIndexOf("/");
+    if (idx === -1) return ".";
+    if (idx === 0) return "/";
+    return path.slice(0, idx);
+}
+
+function join(root: string, finalPath: string): string {
+    const r = root.endsWith("/") ? root.slice(0, -1) : root;
+    const f = finalPath.startsWith("/") ? finalPath : "/" + finalPath;
+    return r + f;
+}
+
+function extname(path: string): string {
+    const base = path.substring(path.lastIndexOf("/") + 1);
+    const idx = base.lastIndexOf(".");
+    if (idx === -1 || idx === 0) return "";
+    return base.substring(idx);
+}
+
+const MIME_TYPES: Record<string, string> = {
+    ".html": "text/html; charset=utf-8",
+    ".js": "text/javascript; charset=utf-8",
+    ".mjs": "text/javascript; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".json": "application/json; charset=utf-8",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".svg": "image/svg+xml",
+    ".wasm": "application/wasm",
+};
+
+function getContentType(ext: string): string {
+    return MIME_TYPES[ext] || "application/octet-stream";
 }
 
 /**
@@ -34,7 +70,7 @@ export function createStaticHandler(
         try {
             const absolutePath = join(root, finalPath);
             const ext = extname(absolutePath).toLowerCase();
-            const cType = contentType(ext) || "application/octet-stream";
+            const cType = getContentType(ext);
             const file = sys.readFileSync(absolutePath);
             return new Response(file as BodyInit, { headers: { "Content-Type": cType } });
         } catch (err: any) {

@@ -1,9 +1,0 @@
-{
-  "permissions": {
-    "storage": {
-      ".": { "access": "read" },
-      "secrets": { "access": "read" }
-    },
-    "bindings": ["safe"]
-  }
-}

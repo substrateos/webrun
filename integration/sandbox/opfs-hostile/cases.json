@@ -1,0 +1,10 @@
+[
+  {
+    "name": "Hostile Storage Mapping blocked",
+    "args": ["script.js"],
+    "expect": {
+      "exit_code": "nonzero",
+      "stderr": [{"contains": "Requires read access"}]
+    }
+  }
+]

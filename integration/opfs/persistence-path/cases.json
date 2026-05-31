@@ -1,0 +1,22 @@
+[
+  {
+    "name": "Experimental OPFS persistence (path strategy)",
+    "runner": "cli",
+    "steps": [
+      { "args": ["write.js"], "expect": { "exit_code": 0 } },
+      { "args": ["read.js"], "expect": { "exit_code": 0 } },
+      {
+        "command": "host",
+        "args": [
+          "sh",
+          "-c",
+          "OPFS_ID=$(printf \"%s\" \"@webrun/opfs:$(pwd)\" | (sha256sum 2>/dev/null || shasum -a 256) | cut -d' ' -f1); grep 'write.js' ~/.webrun/extensions/@webrun/opfs/path/$OPFS_ID/audit.ndjson && grep 'read.js' ~/.webrun/extensions/@webrun/opfs/path/$OPFS_ID/audit.ndjson"
+        ],
+        "expect": {
+            "exit_code": 0,
+            "stdout": [{ "contains": "write.js" }, { "contains": "read.js" }]
+        }
+      }
+    ]
+  }
+]

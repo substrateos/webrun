@@ -1,0 +1,26 @@
+[
+  {
+    "name": "WebSocket upgrade and echo via FetchContext",
+    "args": ["--serve", "ws_server.js"],
+    "signal": "SIGTERM",
+    "timeout_ms": 5000,
+    "expect": {
+      "exit_code": 0,
+      "ready": { "stdout": [{"contains": "Webrun serving at"}] },
+      "http": [
+        {
+          "path": "/",
+          "status": 200,
+          "body": [{"contains": "OK"}]
+        }
+      ],
+      "ws": [
+        {
+          "path": "/",
+          "send": "HELLO",
+          "expect_reply": "ECHO:HELLO"
+        }
+      ]
+    }
+  }
+]

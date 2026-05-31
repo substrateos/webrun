@@ -1,0 +1,10 @@
+[
+  {
+    "name": "Exposes RTCPeerConnection globally when webrtc permission is granted",
+    "args": ["src/test.js"],
+    "expect": {
+      "exit_code": 0,
+      "stdout": [{"contains": "WEBRTC_OK"}]
+    }
+  }
+]

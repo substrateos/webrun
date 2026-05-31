@@ -68,7 +68,7 @@ Changes must sync with the `vendor/` cache.
 
 1. **Run Tests:**
    ```bash
-   ./webrun --self-test
+   make test
    ```
    *Run a specific test or suite by name substring: `./webrun --self-test=SandboxHost`*
 

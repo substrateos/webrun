@@ -1,0 +1,6 @@
+#!/bin/bash
+# Resolve DENO_BIN by evaluating the webrun preamble (up to the sentinel),
+# then exec deno with all arguments forwarded.
+SCRIPT_DIR="$( cd -P "${BASH_SOURCE[0]%/*}" >/dev/null 2>&1 && pwd )"
+eval "$(sed -n '1,/^# --- end preamble ---/p' "$SCRIPT_DIR/src/webrun.preamble.sh")"
+exec "$DENO_BIN" "$@"

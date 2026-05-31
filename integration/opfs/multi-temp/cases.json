@@ -1,0 +1,11 @@
+[
+  {
+    "name": "makeTempDir isolation: multiple calls yield independent directories",
+    "args": ["multi.js"],
+    "runner": "cli",
+    "expect": {
+      "exit_code": 0,
+      "stdout": [{ "contains": "MULTI_OK" }]
+    }
+  }
+]

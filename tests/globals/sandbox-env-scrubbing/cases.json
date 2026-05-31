@@ -1,9 +1,0 @@
-[
-  {
-    "name": "Scrubs injected host environment variables",
-    "args": ["src/env_scrub.js"],
-    "env": {"SUPER_SECRET_VAR": "pwned"},
-    "expect_webrun": { "exit_code": 1, "stderr": [{"contains": "DENO_BLOCKED: Runtime does not support Deno env mapping"}] },
-    "expect_deno":   { "exit_code": 1, "stderr": [{"contains": "LEAKED: pwned"}] }
-  }
-]

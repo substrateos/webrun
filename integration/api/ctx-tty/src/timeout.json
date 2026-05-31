@@ -1,0 +1,5 @@
+{
+  "limits": {
+    "timeoutMillis": 2000
+  }
+}

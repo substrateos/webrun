@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "run": true,
+    "binaries": [["/usr/bin/printenv"], ["/usr/bin/coreutils"]],
+    "network": ["*"],
+    "storage": {
+      ".": { "access": "read" }
+    }
+  }
+}

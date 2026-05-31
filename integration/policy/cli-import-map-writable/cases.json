@@ -1,0 +1,1 @@
+[{ "name": "Blocks import maps within a writable directory proactively", "args": ["src/test.js"], "expect": { "exit_code": 1, "stderr": [{"contains": "Executable in write directory"}, {"contains": "Executable:"}] } }]

@@ -1,9 +1,33 @@
 {
-    "limits": { "timeoutMillis": 120000 },
     "permissions": {
-        "storage": { ".": { "access": "read" } },
-        "network": ["*"],
-        "env": ["*"],
-        "bindings": ["*"]
+        "run": true,
+        "env": [
+            "*"
+        ],
+        "binaries": [
+            ["src"],
+            ["integration"],
+            ["webrun"]
+        ],
+        "storage": {
+            "test_storage": {
+                "access": "write"
+            },
+            "src": {
+                "access": "read"
+            },
+            "integration": {
+                "access": "read"
+            }
+        },
+        "network": [
+            "*"
+        ],
+        "tcp": true,
+        "webrtc": true
+    },
+    "limits": {
+        "timeoutMillis": 30000,
+        "memoryMB": 1024
     }
 }

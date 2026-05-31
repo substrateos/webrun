@@ -1,1 +1,0 @@
-{"bindings": {"migrator": {"process": {"command": ["deno", "run", "-A", "backend.ts"], "portEnv": "PORT"}}}}

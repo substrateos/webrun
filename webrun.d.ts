@@ -18,8 +18,8 @@
  * Controls what the sandboxed guest can do with files under that path.
  */
 export type WebrunStorageAccess =
-    | { access: "read"; airgap?: boolean }
-    | { access: "write"; airgap?: boolean }
+    | { access: "read"; isolate?: boolean }
+    | { access: "write"; isolate?: boolean }
     | { access: "delegate"; ceiling: WebrunPermissions }
     | { access: "none" };
 
@@ -35,8 +35,6 @@ export interface WebrunPermissions {
     network?: string[];
     /** Host environment variable names to inject into the sandbox. */
     env?: string[];
-    /** Named bindings the guest is permitted to call. */
-    bindings?: string[];
     /** Whether to grant WebGPU access. */
     gpu?: boolean;
     /** Whether to enable the WebRTC polyfill (CLI only; browsers have native WebRTC). */
@@ -49,6 +47,18 @@ export interface WebrunPermissions {
     import?: string[];
     /** Explicit capability delegations to specific subdirectories. */
     delegate?: Record<string, WebrunPermissions>;
+    /**
+     * Allowed executable binary prefixes for the OS jail.
+     * Each entry is a command prefix (e.g. ["/usr/bin/git", "rev-list"]).
+     * A spawned command must match at least one prefix to be permitted.
+     */
+    binaries?: string[][];
+    /** Whether this context can spawn child webrun processes via ctx.run(). */
+    run?: boolean;
+    /** Whether to allow converting filesystem handles to URLs. */
+    createFileSystemHandleURL?: boolean;
+    /** Whether to grant direct TCP socket access (Direct Sockets API). */
+    tcp?: boolean;
 }
 
 /**
@@ -66,8 +76,6 @@ export interface WebrunLocationConfig {
         /** Maximum RSS memory in megabytes. */
         memoryMB?: number;
     };
-    /** Host-side binding service declarations (process or module). */
-    bindings?: Record<string, any>;
     /** Path to an import map file for module resolution (relative to webrun.json). */
     importMap?: string;
     /** Unstable feature flags. */
@@ -133,23 +141,17 @@ export interface WebrunTty {
  */
 export interface WebrunContext {
     /** Positional arguments after `--` on the command line. */
-    args: string[];
+    args: readonly string[];
     /** Named flags parsed from the command line (e.g., --foo=bar → { foo: "bar" }). */
-    flags: Record<string, string | boolean>;
+    flags: Readonly<Record<string, string | boolean>>;
     /** Environment variables injected via permissions.env in webrun.json. */
-    env: Record<string, string>;
+    env: Readonly<Record<string, string>>;
     /** Array containing the executable path and any sandbox-level arguments. */
-    argv: string[];
-    /** The canonical URL of the entrypoint file (e.g., file:///path/to/test.html). */
+    argv: readonly string[];
+    /** The canonical URL of the entrypoint file. */
     location: string;
-    /** The raw HTML source code of the entrypoint, if it was an HTML document. */
-    srcdoc?: string;
-    /** The sandboxed root directory (FileSystemDirectoryHandle). */
-    dir: FileSystemDirectoryHandle;
-    /** True when dir points to a persistent storage location (not a temp dir). */
-    persisted: boolean;
-    /** Named binding clients for host-side services. */
-    bindings: Record<string, { fetch: typeof fetch }>;
+    /** The sandboxed root directory. Only set when storage permissions are declared in webrun.json. */
+    dir?: FileSystemDirectoryHandle;
     /** Readable stream for stdin. */
     stdin: ReadableStream<Uint8Array> | null;
     /** Writable stream for stdout. */
@@ -166,28 +168,37 @@ export interface WebrunContext {
     /** Create a sandboxed temporary directory. Cleaned up on process exit. */
     makeTempDir(): Promise<FileSystemDirectoryHandle>;
     /** Upgrade an HTTP request to a WebSocket (--serve mode only). */
-    upgradeWebSocket(request: Request): { socket: WebSocket; response: Response };
+    upgradeWebSocket(options?: { protocol?: string; idleTimeout?: number }): { socket: WebSocket; response: Response };
 
     /**
      * Spawn a child webrun process.
      *
      * @param args - Arguments for the child process.
      * @param options - Options for controlling the child process.
-     * @returns Result with exitCode and optionally stdout/stderr.
+     * @returns A RunHandle for interacting with the live child process.
      */
-    webrun(args: string[], options?: {
-        cwd?: FileSystemDirectoryHandle | string;
+    run: ((args: any[], options?: {
+        dir?: FileSystemDirectoryHandle;
         env?: Record<string, string>;
-        stdout?: WritableStream<Uint8Array>;
-        stderr?: WritableStream<Uint8Array>;
         signal?: AbortSignal;
-        timeoutMillis?: number;
-        memoryMB?: number;
-    }): Promise<{
-        exitCode: number;
-        stdout?: string;
-        stderr?: string;
-    }>;
+        stdin?: ReadableStream<Uint8Array>;
+        mode?: "module" | "binary";
+        serve?: (string | URL)[];
+        permissions?: WebrunPermissions;
+        limits?: { timeoutMillis?: number; memoryMB?: number };
+        importMap?: Record<string, unknown>;
+        storage?: Array<{ handle: FileSystemDirectoryHandle | FileSystemFileHandle; access: "read" | "write" }>;
+        shared?: boolean;
+    }) => Promise<{
+        exitCode: Promise<number>;
+        stdout: ReadableStream<Uint8Array>;
+        stderr: ReadableStream<Uint8Array>;
+        signal(sig: string): void;
+        urls: Promise<URL[]>;
+    }>) & {
+        /** Tagged template for args that reference handles. Grants the child read access to the handle's underlying path. */
+        arg: (strings: TemplateStringsArray, ...values: any[]) => any;
+    };
 }
 
 // =========================================================
