@@ -51,10 +51,16 @@ export const SYSTEM_READ_PATHS = {
         { path: "/dev/tty", optional: true },
         { path: "/etc/resolv.conf", optional: true },
         { path: "/etc/hosts", optional: true },
+        { path: "/etc/ssl", optional: true },
         { path: "/private/etc/resolv.conf", optional: true },
         { path: "/private/etc/hosts", optional: true },
         { path: "/private/etc/services", optional: true },
+        { path: "/private/etc/ssl", optional: true },
         { path: "/private/var/run/mDNSResponder", optional: true },
+        { path: "/nix/store", optional: true },
+        { path: "/Library/Keychains", optional: true },
+        { path: "/private/var/db/mds", optional: true },
+        { path: "/private/var/db/systemstats", optional: true },
     ] as CapabilityPath[],
     linux: [
         { path: "/usr/lib", optional: true },
@@ -70,6 +76,7 @@ export const SYSTEM_READ_PATHS = {
         { path: "/etc/ssl/certs", optional: true },
         { path: "/etc/ca-certificates", optional: true },
         { path: "/proc", optional: true },
+        { path: "/nix/store", optional: true },
     ] as CapabilityPath[],
 } as const;
 
@@ -84,6 +91,7 @@ export const SYSTEM_EXEC_PATHS = {
         { path: "/usr/lib64", optional: true },
         { path: "/lib", optional: true },
         { path: "/lib64", optional: true },
+        { path: "/nix/store", optional: true },
     ] as CapabilityPath[],
 } as const;
 
