@@ -7,7 +7,22 @@
     "binaries": [
       ["llama-server"]
     ],
-    "run": true
+    "env": [
+      "HF_HOME",
+      "HF_HUB_CACHE",
+      "LLAMA_CACHE",
+      "HOME",
+      "SSL_CERT_FILE",
+      "SSL_CERT_DIR",
+      "NIX_SSL_CERT_FILE"
+    ],
+    "run": true,
+    "gpu": true
+  },
+  "extensions": {
+    "@webrun/opfs": {
+      "origin": "path"
+    }
   },
   "portEnv": "LLAMA_ARG_PORT"
 }

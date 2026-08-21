@@ -24,10 +24,33 @@
             "*"
         ],
         "tcp": true,
-        "webrtc": true
+        "webrtc": true,
+        "delegate": {
+            "examples/": {
+                "storage": {
+                    ".": { "access": "read" }
+                },
+                "network": [
+                    "*"
+                ],
+                "run": true,
+                "env": [
+                    "HF_HOME",
+                    "HF_HUB_CACHE",
+                    "LLAMA_CACHE",
+                    "HOME",
+                    "SSL_CERT_FILE",
+                    "SSL_CERT_DIR",
+                    "NIX_SSL_CERT_FILE"
+                ],
+                "binaries": [
+                    ["llama-server"]
+                ],
+                "gpu": true
+            }
+        }
     },
     "limits": {
-        "timeoutMillis": 30000,
         "memoryMB": 1024
     }
 }
