@@ -35,6 +35,7 @@ export interface ResolvedCapabilities {
 
 import type { WebrunPermissions } from "./types.ts";
 import type { BundleInfo } from "./bundle.ts";
+import { isBareCommand } from "./config.ts";
 
 /**
  * System paths the sandbox must read for basic operation (libc, DNS, entropy, etc.).
@@ -99,6 +100,8 @@ interface ResolveCapabilitiesInput {
     /** When the child config has no `permissions` field (P1), this is set to `dir`
      *  to enable permissive local reads. Undefined when restricted mode is active. */
     permissiveDir?: string;
+    /** Optional function to resolve bare command names to absolute paths using the host's original PATH. */
+    resolveBinary?: (cmd: string) => string | undefined;
 }
 
 function resolvePath(base: string, target: string): string {
@@ -164,7 +167,15 @@ export function resolveCapabilities(input: ResolveCapabilitiesInput): ResolvedCa
     const execPaths: CapabilityPath[] = [{ path: canonicalize(bundle.execPath), optional: false }, ...SYSTEM_EXEC_PATHS[os]];
     for (const prefix of permissions.binaries || []) {
         if (prefix.length > 0) {
-            const binPath = canonicalize(resolvePath(dir ?? tempDir, prefix[0]));
+            let binPath = prefix[0];
+            if (input.resolveBinary && isBareCommand(binPath)) {
+                const found = input.resolveBinary(binPath);
+                if (found) binPath = found;
+                else binPath = resolvePath(dir ?? tempDir, binPath);
+            } else {
+                binPath = resolvePath(dir ?? tempDir, binPath);
+            }
+            binPath = canonicalize(binPath);
             execPaths.push({ path: binPath, optional: true });
             readPaths.push({ path: binPath, optional: true });
         }

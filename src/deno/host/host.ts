@@ -216,7 +216,8 @@ export default {
         const sharedRegistry = new SharedRegistry();
 
         const makeDeps = async (proxy?: { url: string; noProxy: string[]; caCertPath: string }) => {
-            const host = { bundle, spawner, proxy };
+            const hostPath = env["PATH"] || "";
+            const host = { bundle, spawner, proxy, hostPath };
             return {
                 Deno: deno,
                 fs,
@@ -226,6 +227,7 @@ export default {
                 spawn: await ctx.ipc.connectSpawner(host, deno),
                 host,
                 sharedRegistry,
+                hostPath,
             };
         };
 

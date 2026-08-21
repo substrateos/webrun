@@ -216,17 +216,18 @@ export function makeProcess(Deno: ProcessDeps): ProcessAPI {
 
             return {
                 pid,
-                /** Non-blocking wait. Returns exit code or null if still running. */
                 waitNonBlocking(): number | null {
                     const status = new Int32Array(1) as Int32Array<ArrayBuffer>;
                     const result = getLibC().waitpid(pid, Deno.UnsafePointer.of(new Uint8Array(status.buffer) as Uint8Array<ArrayBuffer>), WNOHANG);
-                    if (result <= 0) return null;
+                    if (result === -1) {
+                        const e = getLibC().errno();
+                        throw new Error(`waitpid failed: ${e}`);
+                    }
+                    if (result === 0) return null;
                     const raw = status[0];
                     const exited = (raw & 0x7f) === 0;
-                    if (exited) return (raw >> 8) & 0xff;
-                    const signaled = ((raw & 0x7f) + 1) >> 1 > 0;
-                    if (signaled) return 128 + (raw & 0x7f);
-                    return 1;
+                    const code = exited ? ((raw >> 8) & 0xff) : (128 + (raw & 0x7f));
+                    return code;
                 },
                 /** Send a signal to the child. */
                 kill(signal: string): void {

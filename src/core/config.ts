@@ -86,6 +86,10 @@ export async function findLocalConfigurations(rootDir: FileSystemDirectoryHandle
     return localConfigs;
 }
 
+export function isBareCommand(loc: string): boolean {
+    return !loc.includes("/") && !/^[a-z]+:/i.test(loc);
+}
+
 /** Resolve a location string to an absolute path against cwd. URLs pass through. */
 export function resolveLocation(loc: string, cwd: string): string {
     if (/^[a-z]+:/i.test(loc)) return loc;

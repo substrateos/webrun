@@ -25,9 +25,6 @@ export interface ParsedArgs {
     /** First positional arg — the execution target. */
     target: string;
 
-    /** Flags after the target — passed through to ctx.flags. */
-    guestFlags: Record<string, string | boolean>;
-
     /** Positional args after the target (or after --) — passed through to ctx.args. */
     guestArgs: string[];
 
@@ -42,7 +39,7 @@ export interface ParsedArgs {
 }
 
 /** Parse a flag arg: --key=value splits on =, bare --key is boolean true. */
-function parseFlag(args: string[], i: number): [string, string | boolean, number] {
+export function parseFlag(args: string[], i: number): [string, string | boolean, number] {
     const arg = args[i];
     const key = arg.replace(/^-+/, "");
     const eqIdx = key.indexOf("=");
@@ -55,51 +52,51 @@ function parseFlag(args: string[], i: number): [string, string | boolean, number
 function parse(args: string[], env: Record<string, string>): ParsedArgs {
     const flags: WebrunFlags = {};
     let target = "";
-    const guestFlags: Record<string, string | boolean> = {};
     const guestArgs: string[] = [];
-    let phase: "pre" | "post" | "args" = "pre";
+    let phase: "pre" | "post" = "pre";
 
     for (let i = 0; i < args.length; i++) {
         const arg = args[i];
 
-        if (phase === "args") { guestArgs.push(arg); continue; }
-        if (arg === "--") { phase = "args"; continue; }
+        if (phase === "post") { guestArgs.push(arg); continue; }
+        if (arg === "--") {
+            if (!target) {
+                // POSIX: first arg after -- becomes the target when no target was found yet
+                const next = args[i + 1];
+                if (next !== undefined) { target = next; i++; }
+            }
+            phase = "post";
+            continue;
+        }
 
         if (arg.startsWith("-")) {
             const [key, val, newI] = parseFlag(args, i);
-            if (phase === "post") {
-                guestFlags[key] = val;
+            if (typeof val === "boolean") {
+                if (key === "serve") flags.serve = val;
+                else if (key === "check-only") flags["check-only"] = val;
+                else if (key === "no-check") flags["no-check"] = val;
+                else if (key === "help") flags.help = val;
+                else if (key === "h") flags.help = val;
+                else if (key === "version") flags.version = val;
+                else if (key === "v") flags.v = val;
+                else if (key === "e") flags.e = val;
+                else if (key === "eval") flags.eval = val;
+                else if (key === "test") flags.test = val;
+                else throw new Error(`Unknown boolean flag: ${key}`);
             } else {
-                if (typeof val === "boolean") {
-                    if (key === "serve") flags.serve = val;
-                    else if (key === "check-only") flags["check-only"] = val;
-                    else if (key === "no-check") flags["no-check"] = val;
-                    else if (key === "help") flags.help = val;
-                    else if (key === "version") flags.version = val;
-                    else if (key === "v") flags.v = val;
-                    else if (key === "e") flags.e = val;
-                    else if (key === "eval") flags.eval = val;
-                    else if (key === "test") flags.test = val;
-                    else throw new Error(`Unknown boolean flag: ${key}`);
-                } else {
-                    if (key === "bind") flags.bind = val;
-                    else if (key === "dir") flags.dir = val;
-                    else if (key === "limit-time") flags["limit-time"] = val;
-                    else if (key === "limit-memory") flags["limit-memory"] = val;
-                    else if (key === "test") flags.test = val;
-                    else throw new Error(`Unknown string flag: ${key}`);
-                }
+                if (key === "bind") flags.bind = val;
+                else if (key === "dir") flags.dir = val;
+                else if (key === "limit-time") flags["limit-time"] = val;
+                else if (key === "limit-memory") flags["limit-memory"] = val;
+                else if (key === "test") flags.test = val;
+                else throw new Error(`Unknown string flag: ${key}`);
             }
             i = newI;
             continue;
         }
 
-        if (!target) {
-            target = arg;
-            phase = "post";
-        } else {
-            guestArgs.push(arg);
-        }
+        target = arg;
+        phase = "post";
     }
 
     const isServe = !!(flags.serve || flags.bind);
@@ -136,7 +133,7 @@ function parse(args: string[], env: Record<string, string>): ParsedArgs {
     if (typeof rawTime === "string") limits.timeoutMillis = parseInt(rawTime, 10);
     if (typeof rawMem === "string") limits.memoryMB = parseInt(rawMem, 10);
 
-    return { flags, target, guestFlags, guestArgs, isServe, serveUrls, limits };
+    return { flags, target, guestArgs, isServe, serveUrls, limits };
 }
 
 interface CliDeps {

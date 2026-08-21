@@ -1,0 +1,14 @@
+[
+  {
+    "name": "Prevents PATH injection from hijacking binary resolution even when PATH env is explicitly delegated",
+    "runner": "cli",
+    "args": ["main.js"],
+    "expect": {
+      "exit_code": 0,
+      "stdout": [
+        { "contains": "PASS:binary_path_injection_prevented" },
+        { "contains": "PASS:env_passed_to_child" }
+      ]
+    }
+  }
+]

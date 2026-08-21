@@ -70,6 +70,7 @@ const executeSandbox = async (args: string[], env: Record<string, string>, ctx: 
         cacheDir: mod.fs.cacheDir,
         spawn: await ctx.ipc.connectSpawner(descriptor.host, Deno),
         host: descriptor.host,
+        hostPath: descriptor.host?.hostPath,
         sharedRegistry,
     };
 

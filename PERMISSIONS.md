@@ -96,7 +96,7 @@ When a `permissions` field is present in a discovered webrun.json, **all filesys
 | WebGPU (`gpu`) | `true` if explicit gpu permission granted |
 | WebRTC (`webrtc`) | `true` if explicit webrtc permission granted |
 | Spawn children (`run`) | `true` if explicit run permission granted |
-| OS binary prefixes (`binaries`) | Per declared prefixes, e.g. `[["/usr/bin/git", "rev-list"]]` |
+| OS binary prefixes (`binaries`) | Per declared prefixes, e.g. `[["git", "rev-list"]]` or `[["/usr/bin/git"]]`. Bare commands (without `/`) are resolved against the host's original `PATH` at sandbox setup time. |
 | Expose URL paths (`createFileSystemHandleURL`) | `true` if explicit createFileSystemHandleURL permission granted |
 
 Local path entries in `locations` implicitly grant read access to their own directory — a location you can't read is unusable.

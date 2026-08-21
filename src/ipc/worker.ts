@@ -54,11 +54,11 @@ export function exposeSelf(api: WorkerAPI): void {
                         ? Comlink.transfer({ ...options }, asTransferable([options.stdin]))
                         : options;
                     const wire = await sandboxAPI.run(args, opts);
-                    const proxy = Comlink.wrap<{ exitCode: Promise<number>; signal(sig: string): void }>(wire._port);
+                    const proxy = Comlink.wrap<{ getExitCode(): Promise<number>; signal(sig: string): void }>(wire._port);
                     return {
                         stdout: wire.stdout,
                         stderr: wire.stderr,
-                        exitCode: proxy.exitCode as Promise<number>,
+                        exitCode: proxy.getExitCode(),
                         signal: (sig: string) => proxy.signal(sig),
                         urls: Promise.resolve((wire.urls || []).map((u: string) => new URL(u))),
                     };
@@ -98,7 +98,7 @@ export function connectWorker(worker: Worker, sandboxAPI: WorkerContext): Worker
 
             const { port1, port2 } = new MessageChannel();
             Comlink.expose({
-                exitCode: handle.exitCode,
+                getExitCode: () => handle.exitCode,
                 signal: handle.signal.bind(handle),
             }, port1);
 

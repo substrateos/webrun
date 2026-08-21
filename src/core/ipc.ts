@@ -35,10 +35,11 @@ export interface ContextDescriptor {
     mode: 'binary' | 'module';
 
     /** Host services inherited by children. */
-    host: {
-        bundle: BundleInfo;
+    host?: {
+        bundle?: BundleInfo;
         spawner?: { socketPath: string; token: string };
         proxy?: { url: string; noProxy: string[]; caCertPath: string };
+        hostPath?: string;
     };
 
     binary?: {

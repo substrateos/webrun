@@ -97,3 +97,70 @@ export async function testDirFlag(t: any) {
         }
     });
 }
+
+// ── Strict Positional Preservation ──────────────────────────────────
+
+interface PreservationTestCase {
+    name: string;
+    args: string[];
+    expectTarget: string;
+    expectGuestArgs: string[];
+}
+
+const preservationCases: PreservationTestCase[] = [
+    {
+        name: "Preserves trailing flags and values exactly as provided",
+        args: ["--limit-time=1000", "openssl", "s_server", "-cert", "test-cert.pem", "--foo=bar"],
+        expectTarget: "openssl",
+        expectGuestArgs: ["s_server", "-cert", "test-cert.pem", "--foo=bar"],
+    },
+    {
+        name: "-- before target consumes first positional as target",
+        args: ["--limit-memory=512", "--", "openssl", "-cert", "test-cert.pem"],
+        expectTarget: "openssl",
+        expectGuestArgs: ["-cert", "test-cert.pem"],
+    },
+];
+
+export async function testGuestArgsPreservation(t: any) {
+    for (const tc of preservationCases) {
+        await t.run(tc.name, async () => {
+            const parsed = await parse(tc.args);
+            
+            if (parsed.target !== tc.expectTarget) {
+                throw new Error(`Expected target "${tc.expectTarget}", got "${parsed.target}"`);
+            }
+            
+            if (parsed.guestArgs.length !== tc.expectGuestArgs.length) {
+                throw new Error(`Expected ${tc.expectGuestArgs.length} guestArgs, got ${parsed.guestArgs.length}: [${parsed.guestArgs.join(", ")}]`);
+            }
+            
+            for (let i = 0; i < tc.expectGuestArgs.length; i++) {
+                if (parsed.guestArgs[i] !== tc.expectGuestArgs[i]) {
+                    throw new Error(`Expected guestArgs[${i}] === "${tc.expectGuestArgs[i]}", got "${parsed.guestArgs[i]}"`);
+                }
+            }
+        });
+    }
+}
+
+
+// ── -h flag ─────────────────────────────────────────────────────────
+
+export async function testShortHelpFlag(t: any) {
+    await t.run("-h triggers help (same as --help)", async () => {
+        let helpPrinted = false;
+        const deps = {
+            ...stubDeps,
+            console: { log() { helpPrinted = true; }, error() {} },
+        };
+        try {
+            await cli(["-h"], {}, deps as any);
+        } catch (e: any) {
+            if (e.message !== "exit") throw e;
+        }
+        if (!helpPrinted) {
+            throw new Error("Expected -h to trigger help output");
+        }
+    });
+}

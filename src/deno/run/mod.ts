@@ -1,5 +1,6 @@
 import createFS from "../file_system/mod.ts";
-import { resolveLocation, resolveLocationChain, mergeConfigurations, findLocalConfigurations, resolveAllAliases, type LocalConfig } from "../../core/config.ts";
+import { resolveLocation, resolveLocationChain, mergeConfigurations, findLocalConfigurations, resolveAllAliases, isBareCommand, type LocalConfig } from "../../core/config.ts";
+import { parseFlag } from "../../core/host/cli.ts";
 import { resolveCapabilities, augmentForJail } from "../../core/capabilities.ts";
 import toDenoFlags from "../jail/mod.ts";
 import inferMode from "../../core/host/mode.ts";
@@ -23,6 +24,8 @@ export interface RunDeps {
     fs: ReturnType<typeof createFS>;
     /** Parent directory for ephemeral temp dirs. */
     tempDir: string;
+    /** The original unmodifiable host PATH environment variable. */
+    hostPath?: string;
     /** Directory for runtime caches (e.g. Deno module cache). */
     cacheDir: string;
     /** Directory for persistent extension data. */
@@ -138,15 +141,7 @@ export function buildRunFn(
             throw new TypeError("shared runs must not specify extra args — only the target is allowed");
         }
 
-        // Forward webrun-level flags into guestFlags so they reach the
-        // sandbox/worker extensions. The host entry point does the same
-        // re-injection (host.ts:257-260).
-        if (parsed.flags.test !== undefined) {
-            parsed.guestFlags.test = parsed.flags.test;
-        }
-        if (parsed.flags["check-only"]) {
-            parsed.guestFlags["check-only"] = true;
-        }
+
 
         const cwd = options.dir;
 
@@ -172,6 +167,24 @@ export function buildRunFn(
             }),
         };
 
+        const which = (cmd: string): string | undefined => {
+            const pathStr = deps.hostPath ?? "";
+            const sep = deps.Deno.build.os === "windows" ? ";" : ":";
+            for (const p of pathStr.split(sep)) {
+                if (!p) continue;
+                const attempt = `${p}/${cmd}`;
+                try {
+                    const stat = deps.Deno.statSync(attempt);
+                    if (stat.isFile && (stat.mode === null || (stat.mode & 0o111) !== 0)) {
+                        return attempt;
+                    }
+                } catch {
+                    // Ignore NotCapable, NotFound, etc.
+                }
+            }
+            return undefined;
+        };
+
         let resolved: string | undefined;
         let guestArgs: string[];
         const vt = virtualTargets[target];
@@ -181,8 +194,17 @@ export function buildRunFn(
             guestArgs = result.args;
         } else {
             guestArgs = rawArgs;
-            resolved = aliases[target || "default"]
-                ?? (target && cwd ? resolveLocation(target, cwd) : target || undefined);
+            const alias = aliases[target || "default"];
+            if (alias) {
+                resolved = alias;
+            } else if (target) {
+                if (isBareCommand(target)) {
+                    const found = which(target);
+                    resolved = found ? canonicalize(found) : (cwd ? resolveLocation(target, cwd) : target);
+                } else {
+                    resolved = cwd ? resolveLocation(target, cwd) : target;
+                }
+            }
         }
         const mode = inferMode(resolved || "");
 
@@ -295,7 +317,6 @@ export function buildRunFn(
         const rawServeUrls = parsed.serveUrls.length > 0 ? parsed.serveUrls : (options.serve || []);
         const serve = resolveServeUrls(rawServeUrls, Deno.listen);
 
-
         const caps = resolveCapabilities({
             permissions: config.permissions || {},
             bundle,
@@ -306,6 +327,7 @@ export function buildRunFn(
             tempDir: tempRoot,
             canonicalize,
             permissiveDir: !permissionsActivated ? (cwd || dir) : undefined,
+            resolveBinary: which,
         });
 
         const violations = validate({
@@ -315,8 +337,8 @@ export function buildRunFn(
             argv: mode === "binary" ? [resolved!, ...guestArgs] : [],
             allowedWritePaths: caps.writePaths.map(p => p.path),
             allowedBinaryPrefixes: vt
-                ? [[resolved!], ...resolveBinaryPrefixes(config.permissions?.binaries || [], cwd || dir, canonicalize)]
-                : resolveBinaryPrefixes(config.permissions?.binaries || [], cwd || dir, canonicalize),
+                ? [[resolved!], ...resolveBinaryPrefixes(config.permissions?.binaries || [], cwd || dir, canonicalize, which)]
+                : resolveBinaryPrefixes(config.permissions?.binaries || [], cwd || dir, canonicalize, which),
             resolveDir: getPath,
             canonicalize,
             ceiling,
@@ -332,7 +354,6 @@ export function buildRunFn(
             throw securityError(formatted, violations[0]);
         }
 
-        // Filter env through permissions
         const allowedEnv: Record<string, string> = {};
         const envPerms = config.permissions?.env || [];
         const sourceEnv = options.env || {};
@@ -420,6 +441,26 @@ export function buildRunFn(
             }
         }
 
+        let moduleArgs: string[] = [];
+        let moduleFlags: Record<string, string | boolean> = {};
+        if (mode !== "binary") {
+            let phase: "flags" | "args" = "flags";
+            for (let i = 0; i < guestArgs.length; i++) {
+                const arg = guestArgs[i];
+                if (phase === "args") { moduleArgs.push(arg); continue; }
+                if (arg === "--") { phase = "args"; continue; }
+                if (arg.startsWith("-")) {
+                    const [key, val] = parseFlag(guestArgs, i);
+                    moduleFlags[key] = val;
+                    continue;
+                }
+                moduleArgs.push(arg);
+            }
+            // webrun-level flags pass-through (like test, check-only)
+            if (parsed.flags.test !== undefined) moduleFlags.test = parsed.flags.test;
+            if (parsed.flags["check-only"]) moduleFlags["check-only"] = true;
+        }
+
         const descriptor: ContextDescriptor = {
             caps: augmented,
             drop,
@@ -429,13 +470,13 @@ export function buildRunFn(
                 binary: {
                     command: resolved!,
                     args: guestArgs,
-                    env: sandboxEnv,
+                    env: { ...allowedEnv, ...sandboxEnv },
                 },
             } : {
                 module: {
                     argv: ["webrun", ...args],
-                    args: guestArgs,
-                    flags: parsed.guestFlags,
+                    args: moduleArgs,
+                    flags: moduleFlags,
                     env: allowedEnv,
                     config,
                     aliases: context.aliases,
@@ -480,7 +521,10 @@ export function buildRunFn(
         ];
         const childEnv: Record<string, string> = {
             ...runtimeEnv,
+            ...allowedEnv,
             ...sandboxEnv,
+            ...(host.spawner ? { WEBRUN_SPAWNER_TOKEN: host.spawner.token } : {}),
+            ...(bundle.testAdapterPath ? { WEBRUN_TEST_ADAPTER: bundle.testAdapterPath } : {}),
             // Binary mode + serve: inject the port so the binary knows where to bind.
             // Uses portEnv from location config (e.g. "LLAMA_ARG_PORT"), defaulting to "PORT".
             ...(mode === "binary" && serve.ports.length > 0
@@ -662,11 +706,17 @@ function resolveBinaryPrefixes(
     prefixes: string[][],
     dir: string,
     canonicalize: (p: string) => string,
+    which: (cmd: string) => string | undefined,
 ): string[][] {
     return prefixes.map(prefix => {
         if (prefix.length === 0) return prefix;
         const head = prefix[0];
         if (head.startsWith("/")) return prefix;
+        if (isBareCommand(head)) {
+            const found = which(head);
+            if (found) return [canonicalize(found), ...prefix.slice(1)];
+            return prefix;
+        }
         // Relative path — resolve against dir.
         const resolved = canonicalize(new URL(head, "file://" + dir + "/").pathname);
         return [resolved, ...prefix.slice(1)];

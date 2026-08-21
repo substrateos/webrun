@@ -1,0 +1,13 @@
+[
+  {
+    "name": "Resolves bare commands using system PATH",
+    "runner": "cli",
+    "args": ["main.js"],
+    "expect": {
+      "exit_code": 0,
+      "stdout": [
+        { "contains": "PASS:binary_path_resolution" }
+      ]
+    }
+  }
+]

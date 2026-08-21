@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "run": true,
+    "env": ["PATH"],
+    "binaries": [
+      ["env"]
+    ],
+    "storage": {
+      ".": { "access": "read" }
+    }
+  }
+}
