@@ -1,10 +1,22 @@
 [
   {
     "name": "Aborts runaway processes via webrun.json configurable timeout",
-    "args": ["src/test.js"],
+    "args": [
+      "src/test.js"
+    ],
     "expect": {
       "exit_code": 143,
-      "stderr": [{"contains": "Execution exceeded timeout constraint (1000ms)"}]
+      "stderr": [
+        {
+          "contains": "Execution exceeded timeout constraint (1000ms)"
+        }
+      ],
+      "negation": {
+        "limits": {
+          "timeoutMillis": 300000,
+          "memoryMB": 4096
+        }
+      }
     }
   }
 ]

@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "storage": { ".": { "access": "read" } },
+    "run": true,
+    "binaries": [
+      ["/usr/sbin/ioreg"],
+      ["/bin/ls"]
+    ]
+  }
+}

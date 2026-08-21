@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "storage": { ".": { "access": "read" } },
+    "run": true,
+    "network": ["*"],
+    "binaries": [
+      ["/usr/bin/curl"],
+      ["curl"],
+      ["/usr/bin/openssl"],
+      ["openssl"]
+    ]
+  }
+}

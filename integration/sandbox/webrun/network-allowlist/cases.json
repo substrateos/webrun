@@ -4,7 +4,12 @@
     "args": ["src/test.js"],
     "expect": {
       "exit_code": 0,
-      "stdout": [{"contains": "FETCH_ALLOWED"}]
+      "stdout": [{"contains": "FETCH_ALLOWED"}],
+      "negation": {
+        "permissions": {
+          "network": []
+        }
+      }
     }
   }
 ]

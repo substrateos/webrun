@@ -1,0 +1,10 @@
+[
+  {
+    "name": "GPU disabled (default) blocks hardware device access",
+    "args": ["main.js"],
+    "expect": {
+      "exit_code": 0,
+      "stdout": [{"contains": "GPU_BLOCKED"}]
+    }
+  }
+]

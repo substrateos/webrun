@@ -30,6 +30,10 @@ export interface CaseExpect {
     http?: HttpProbe[];
     ws?: WsProbe[];
     files?: Array<{ path: string; contains?: string; exists?: boolean }>;
+    negation?: {
+        permissions?: any;
+        limits?: any;
+    };
 }
 
 export interface SequenceStep {

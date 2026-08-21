@@ -1,3 +1,11 @@
 [
-  { "name": "Blocks outgoing requests by default", "args": ["src/fetch_block.js"], "expect": { "exit_code": 1, "stderr": [{"contains": "BLOCKED:"}] } }
+  { 
+    "name": "Blocks outgoing requests by default", 
+    "args": ["src/fetch_block.js"], 
+    "expect": { 
+      "exit_code": 1, 
+      "stderr": [{"contains": "BLOCKED:"}],
+      "negation": { "permissions": { "network": ["*"] } }
+    } 
+  }
 ]

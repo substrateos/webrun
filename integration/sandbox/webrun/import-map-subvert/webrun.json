@@ -1,1 +1,8 @@
-{"importMap": "import_map.json", "permissions": {"storage": {"src": {"access": "read"}}, "network": ["*"], "env": ["*"]}, "limits": {"timeoutMillis": 300000, "memoryMB": 4096}}
+{
+  "importMap": "import_map.json",
+  "permissions": {
+    "storage": {
+      "src": { "access": "read" }
+    }
+  }
+}

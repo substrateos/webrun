@@ -5,7 +5,12 @@
     "timeout_ms": 15000,
     "expect": {
       "exit_code": 0,
-      "stdout": [{"contains": "IMPORT_OK:2,4,6"}]
+      "stdout": [{"contains": "IMPORT_OK:2,4,6"}],
+      "negation": {
+        "permissions": {
+          "import": []
+        }
+      }
     }
   }
 ]

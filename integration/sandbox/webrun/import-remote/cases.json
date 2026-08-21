@@ -5,7 +5,12 @@
     "timeout_ms": 15000,
     "expect": {
       "exit_code": 0,
-      "stdout": [{"contains": "IMPORT_OK:bar.txt"}]
+      "stdout": [{"contains": "IMPORT_OK:bar.txt"}],
+      "negation": {
+        "permissions": {
+          "import": []
+        }
+      }
     }
   }
 ]

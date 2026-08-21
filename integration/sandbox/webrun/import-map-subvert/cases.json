@@ -1,11 +1,25 @@
 [
   {
     "name": "Proves importing from import map does not subvert user storage permissions",
-    "args": ["test.js"],
+    "args": [
+      "test.js"
+    ],
     "cwd": "src",
     "expect": {
       "exit_code": 1,
-      "stderr": [{"contains": "Requires read access to"}]
+      "stderr": [
+        {
+          "contains": "Requires read access to"
+        }
+      ],
+      "negation": {
+        "permissions": {
+          "storage": {
+            "src": { "access": "read" },
+            "lib": { "access": "read" }
+          }
+        }
+      }
     }
   }
 ]

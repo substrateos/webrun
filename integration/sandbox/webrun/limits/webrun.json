@@ -1,1 +1,10 @@
-{"permissions": {"storage": {".": {"access": "read"}, "data": {"access": "write"}}, "network": ["*"], "env": ["*"]}, "limits": {"timeoutMillis": 1000}}
+{
+  "permissions": {
+    "storage": {
+      ".": { "access": "read" }
+    }
+  },
+  "limits": {
+    "timeoutMillis": 1000
+  }
+}

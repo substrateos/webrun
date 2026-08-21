@@ -1,0 +1,10 @@
+[
+  {
+    "name": "Native TLS verification fails cleanly (Sandbox correctly maps trustd/certs)",
+    "args": ["main.js"],
+    "expect": {
+      "exit_code": 0,
+      "stdout": [{"contains": "TLS_VERIFICATION_FAILED_PROPERLY"}]
+    }
+  }
+]

@@ -1,1 +1,8 @@
-{"permissions": {"storage": {".": {"access": "read"}, "data": {"access": "write"}}}}
+{
+  "permissions": {
+    "storage": {
+      ".": { "access": "read" },
+      "data": { "access": "write" }
+    }
+  }
+}

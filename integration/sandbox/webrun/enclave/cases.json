@@ -5,7 +5,14 @@
     "cwd": "my_custom_enclave",
     "expect": {
       "exit_code": 0,
-      "stdout": [{"contains": "ENCLAVE_SUCCESS"}]
+      "stdout": [{"contains": "ENCLAVE_SUCCESS"}],
+      "negation": {
+        "permissions": {
+          "storage": {
+            "my_custom_enclave": { "access": "read" }
+          }
+        }
+      }
     }
   }
 ]

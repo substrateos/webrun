@@ -1,10 +1,28 @@
 [
   {
     "name": "Hostile Storage Mapping blocked",
-    "args": ["script.js"],
+    "args": [
+      "script.js"
+    ],
     "expect": {
       "exit_code": "nonzero",
-      "stderr": [{"contains": "Requires read access"}]
+      "stderr": [
+        {
+          "contains": "Requires read access"
+        }
+      ],
+      "negation": {
+        "permissions": {
+          "storage": {
+            ".": {
+              "access": "read"
+            },
+            "data": {
+              "access": "write"
+            }
+          }
+        }
+      }
     }
   }
 ]

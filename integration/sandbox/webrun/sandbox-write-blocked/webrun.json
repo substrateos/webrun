@@ -1,1 +1,9 @@
-{"permissions": {"storage": {".": {"access": "read"}}, "network": ["*"], "env": ["*"]}, "limits": {"timeoutMillis": 300000, "memoryMB": 4096}}
+{
+  "permissions": {
+    "storage": {
+      ".": {
+        "access": "read"
+      }
+    }
+  }
+}

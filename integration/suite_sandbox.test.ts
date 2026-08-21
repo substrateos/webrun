@@ -3,84 +3,34 @@ import type { CaseExpect, DirHandle } from "./suite.ts";
 import { copyDir } from "./runner.ts";
 import { runCliCase } from "./runner_cli.ts";
 
-const PERMISSIVE_LIMITS: Record<string, number> = {
-    timeoutMillis: 300000,
-    memoryMB: 4096,
-};
+function negateContainsRules(rules?: import("./suite.ts").ContainsRule[]): import("./suite.ts").ContainsRule[] | undefined {
+    if (!rules) return undefined;
+    return rules.map(rule => {
+        if (rule.contains !== undefined) return { absent: rule.contains };
+        if (rule.absent !== undefined) return { contains: rule.absent };
+        return rule;
+    });
+}
 
-function isStoragePermissive(storage: any): boolean {
-    if (!storage) return false;
-    const dot = storage["."];
-    if (!dot) return false;
-    if (dot.access !== "read" && dot.access !== "write") return false;
-    if (dot.access === "read") {
-        return Object.keys(storage).some(
-            (k: string) => k !== "." && storage[k]?.access === "write"
-        );
+function negateExpectations(expect: CaseExpect): CaseExpect {
+    const negated: CaseExpect = {
+        exit_code: (expect.exit_code === 0) ? "nonzero" : 0,
+    };
+    if (expect.stdout) negated.stdout = negateContainsRules(expect.stdout);
+    if (expect.stderr) negated.stderr = negateContainsRules(expect.stderr);
+    if (expect.ready) {
+        negated.ready = {};
+        if (expect.ready.stdout) negated.ready.stdout = negateContainsRules(expect.ready.stdout);
+        if (expect.ready.stderr) negated.ready.stderr = negateContainsRules(expect.ready.stderr);
     }
-    return true;
-}
-
-function isNetworkPermissive(network: any): boolean {
-    return Array.isArray(network) && network.length > 0;
-}
-
-function isEnvPermissive(env: any): boolean {
-    return Array.isArray(env) && env.length > 0;
-}
-
-function isLimitPermissive(key: string, value: any): boolean {
-    if (value === undefined) return true;
-    return value === PERMISSIVE_LIMITS[key];
-}
-
-function detectRestrictedAxis(config: any, caseName: string): string | null {
-    const perms = config.permissions ?? {};
-    const limits = config.limits ?? {};
-    const restricted: string[] = [];
-
-    if (!isStoragePermissive(perms.storage)) restricted.push("storage");
-    if (!isNetworkPermissive(perms.network)) restricted.push("network");
-    if (!isEnvPermissive(perms.env)) restricted.push("env");
-
-    for (const axis of Object.keys(PERMISSIVE_LIMITS)) {
-        if (!isLimitPermissive(axis, limits[axis])) {
-            restricted.push(`limits.${axis}`);
-        }
+    if (expect.files) {
+        negated.files = expect.files.map(f => {
+            const inverted = { ...f };
+            if (typeof f.exists === "boolean") inverted.exists = !f.exists;
+            return inverted;
+        });
     }
-
-    if (restricted.length === 0) return null;
-    if (restricted.length === 1) return restricted[0];
-
-    throw new Error(
-        `ERROR: Sandbox test "${caseName}" restricts multiple axes: [${restricted.join(", ")}].\n` +
-        `Each sandbox test must target exactly ONE permission boundary.`
-    );
-}
-
-function buildPermissiveConfig(original: any, restrictedAxis: string): any {
-    const config = JSON.parse(JSON.stringify(original));
-    if (!config.permissions) config.permissions = {};
-
-    if (restrictedAxis.startsWith("limits.")) {
-        if (!config.limits) config.limits = {};
-        const key = restrictedAxis.replace("limits.", "");
-        config.limits[key] = PERMISSIVE_LIMITS[key];
-    } else if (restrictedAxis === "storage") {
-        config.permissions.storage = { ".": { access: "read" }, "data": { access: "write" } };
-    } else if (restrictedAxis === "network") {
-        config.permissions.network = ["*"];
-    } else if (restrictedAxis === "env") {
-        config.permissions.env = ["*"];
-    }
-
-    return config;
-}
-
-function isFailingCase(expect: CaseExpect): boolean {
-    if (expect.exit_code === "nonzero") return true;
-    if (typeof expect.exit_code === "number" && expect.exit_code !== 0) return true;
-    return false;
+    return negated;
 }
 
 /** Read text from a file handle inside a directory. */
@@ -108,35 +58,38 @@ export async function testSandboxHost(t: any, ctx: any) {
             await runCliCase(caseDir, def, ctx);
         });
 
-        if (isFailingCase(def.expect!)) {
-            await t.run(`[INVERTED] ${def.name}`, async () => {
-                let config: any;
+        if (def.expect?.negation) {
+            await t.run(`[NEGATED] ${def.name}`, async () => {
+                let config: any = {};
                 try {
                     const raw = await readText(caseDir, "webrun.json");
                     config = JSON.parse(raw);
                 } catch {
-                    throw new Error(`[INVERTED] Cannot auto-invert "${def.name}": no webrun.json found`);
+                    // It's ok if there's no webrun.json, we will create one
                 }
 
-                const axis = detectRestrictedAxis(config, def.name);
-                if (axis === null) {
-                    throw new Error(`[INVERTED] Cannot auto-invert "${def.name}": webrun.json is already fully permissive`);
-                }
-
-                const runDir = ctx.makeTempDir("inv_");
+                const runDir = ctx.makeTempDir("neg_");
                 await copyDir(caseDir, runDir);
 
-                const permissive = buildPermissiveConfig(config, axis);
+                // Shallow merge: negation.permissions intentionally replaces entire
+                // permission axes (e.g. storage, network) rather than deep-merging.
+                // Each negation block must declare the complete replacement value.
+                if (def.expect.negation!.permissions) {
+                    config.permissions = { ...config.permissions, ...def.expect.negation!.permissions };
+                }
+                if (def.expect.negation!.limits) {
+                    config.limits = { ...config.limits, ...def.expect.negation!.limits };
+                }
 
-                if (axis === "storage") {
+                if (config.permissions?.storage?.data) {
                     const dataDir = await runDir.getDirectoryHandle("data", { create: true });
                     await copyDir(caseDir, dataDir);
                 }
 
-                await writeText(runDir, "webrun.json", JSON.stringify(permissive));
+                await writeText(runDir, "webrun.json", JSON.stringify(config, null, 2));
 
-                const invDef = { ...def, expect: { exit_code: 0 as const } };
-                await runCliCase(runDir, invDef, ctx);
+                const negDef = { ...def, expect: negateExpectations(def.expect!) };
+                await runCliCase(runDir, negDef, ctx);
             });
         }
     }

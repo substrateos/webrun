@@ -1,7 +1,28 @@
 [
   {
     "name": "Blocks writes conditionally via read access map limits",
-    "args": ["src/write_under_read.js"],
-    "expect": { "exit_code": 1, "stderr": [{"contains": "BLOCKED:"}] }
+    "args": [
+      "src/write_under_read.js"
+    ],
+    "expect": {
+      "exit_code": 1,
+      "stderr": [
+        {
+          "contains": "BLOCKED:"
+        }
+      ],
+      "negation": {
+        "permissions": {
+          "storage": {
+            ".": {
+              "access": "read"
+            },
+            "data": {
+              "access": "write"
+            }
+          }
+        }
+      }
+    }
   }
 ]

@@ -1,0 +1,16 @@
+[
+  {
+    "name": "Blocks remote ES module imports by default",
+    "args": ["src/main.js"],
+    "expect": {
+      "exit_code": 1,
+      "stderr": [{"contains": "TypeError: Requires import access"}],
+      "negation": {
+        "permissions": {
+          "import": ["*"],
+          "network": ["*"]
+        }
+      }
+    }
+  }
+]

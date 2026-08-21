@@ -93,29 +93,40 @@ When `signal` is present, the orchestrator:
 
 ## Sandbox Tests (`tests/sandbox/`)
 
-**Single-boundary policy tests.** Each test restricts exactly ONE permission axis in its `webrun.json`, with all other axes maximally permissive. The test payload is designed to fail only because of that one restriction.
+**Permission boundary tests.** Each test restricts specific permission axes in its `webrun.json` and verifies that the sandbox correctly enforces those restrictions.
 
-### Auto-Inversion
+### Declarative Negation
 
-For each failing sandbox test, the orchestrator automatically:
-1. Detects which permission axis is restricted.
-2. Copies the test to a temp directory.
-3. Rewrites `webrun.json` to relax the restricted axis.
-4. Re-runs the same payload, expecting exit 0.
+For sandbox tests that should fail due to a permission restriction, the test case declares an explicit `negation` block in `cases.json`. This block specifies the config overrides that would make the test pass:
+
+```json
+[
+  {
+    "name": "Blocks writes conditionally via read access map limits",
+    "args": ["src/write_under_read.js"],
+    "expect": {
+      "exit_code": 1,
+      "stderr": [{"contains": "BLOCKED:"}],
+      "negation": {
+        "permissions": {
+          "storage": {
+            ".": { "access": "read" },
+            "data": { "access": "write" }
+          }
+        }
+      }
+    }
+  }
+]
+```
+
+When `negation` is present, the orchestrator automatically:
+1. Copies the test to a temp directory.
+2. Shallow-merges `negation.permissions` and `negation.limits` into the `webrun.json` config (each key fully replaces the original).
+3. Inverts the expectations (exit 0 ↔ nonzero, `contains` ↔ `absent`).
+4. Re-runs the same payload, verifying that relaxing the restriction makes the test pass.
 
 This proves that the sandbox boundary — not a broken payload — is the sole cause of failure.
-
-### Single-Boundary Invariant
-
-Each `webrun.json` must be maximally permissive except for ONE axis:
-
-| Axis | Permissive Value | Restricted Example |
-|------|------------------|--------------------|
-| `storage` | `{".": {"access": "read"}, "data": {"access": "write"}}` | absent, or `{".": {"access": "read"}}` without write subdirs |
-| `network` | `["*"]` (wildcard = allow all) | absent or `[]` |
-| `env` | `["*"]` (wildcard = inject all host vars) | absent or `[]` |
-| `limits.timeoutMillis` | `300000` or absent | any lower value |
-| `limits.memoryMB` | `4096` or absent | any lower value |
 
 ---
 
